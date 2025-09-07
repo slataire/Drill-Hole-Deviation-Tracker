@@ -61,6 +61,48 @@ def wrap_az(az):
 def clamp(v, vmin, vmax):
     return max(vmin, min(v, vmax))
 
+def normalize_dip_az(dip, az):
+    """
+    Keep dip in [-90, 90] and adjust az by 180 when crossing a pole so the
+    physical direction stays continuous.
+
+    Convention:
+    - Azimuth clockwise from north in horizontal plane.
+    - Dip from horizontal, negative down.
+    """
+    az = float(az)
+    dip = float(dip)
+
+    while dip > 90.0:
+        dip = 180.0 - dip
+        dip = -dip
+        az += 180.0
+
+    while dip < -90.0:
+        dip = -180.0 - dip
+        dip = -dip
+        az += 180.0
+
+    return wrap_az(az), clamp(dip, -90.0, 90.0)
+
+def step_orientation(az, dip, d, lift_per100, drift_per100):
+    """
+    Constant-dogleg stepping.
+    - lift_per100: change of dip-from-horizontal, deg per 100 m (negative down).
+    - drift_per100: nominal azimuth change, deg per 100 m.
+    We scale az step by 1/cos(|dip|) so the rotation on the unit sphere is uniform.
+    """
+    d_dip = lift_per100 * (d / 100.0)
+
+    cos_h = np.cos(np.deg2rad(abs(dip)))  # = sin(inclination-from-vertical)
+    scale = 1.0 / max(cos_h, 1e-9)
+    d_az = drift_per100 * (d / 100.0) * scale
+
+    az_new = az + d_az
+    dip_new = dip + d_dip
+    az_new, dip_new = normalize_dip_az(dip_new, az_new)
+    return az_new, dip_new
+
 def min_curvature_path(stations):
     # stations: list of dicts with MD, Azimuth, Angle (dip-from-horizontal, negative = down)
     if not stations:
@@ -69,7 +111,7 @@ def min_curvature_path(stations):
     MDs = np.array([float(s["MD"]) for s in stations], float)
     AZs = np.deg2rad([wrap_az(float(s["Azimuth"])) for s in stations])
     DIP = np.array([float(s["Angle"]) for s in stations], float)
-    # inclination-from-vertical magnitude; sign handled via SGN for vertical component
+    # inclination-from-vertical magnitude; sign handled via SGN for vertical
     INC = np.deg2rad(90.0 - np.abs(DIP))
     SGN = np.where(DIP <= 0.0, -1.0, 1.0)  # negative dip means down
     X, Y, Z = [0.0], [0.0], [0.0]
@@ -86,14 +128,13 @@ def min_curvature_path(stations):
         RF = 1.0 if dog < 1e-12 else (2.0/dog)*np.tan(dog/2.0)
         dN = 0.5*dMD*(np.sin(inc1)*np.cos(az1) + np.sin(inc2)*np.cos(az2))*RF
         dE = 0.5*dMD*(np.sin(inc1)*np.sin(az1) + np.sin(inc2)*np.sin(az2))*RF
-        dZ = 0.5*dMD*(s1*np.cos(inc1) + s2*np.cos(inc2))*RF  # signed vertical
+        dZ = 0.5*dMD*(s1*np.cos(inc1) + s2*np.cos(inc2))*RF  # Z up
         X.append(X[-1] + dE)
         Y.append(Y[-1] + dN)
         Z.append(Z[-1] + dZ)
     return np.array(X), np.array(Y), np.array(Z), MDs
 
 def make_planned_stations(length_m, step_m, az0, dip0, lift_per100, drift_per100):
-    # lift is change of dip per 100 m. dip_new = dip_old + lift*(d/100)
     md = 0.0
     az = wrap_az(az0)
     dip = clamp(dip0, -90.0, 90.0)
@@ -101,13 +142,11 @@ def make_planned_stations(length_m, step_m, az0, dip0, lift_per100, drift_per100
     while md < length_m - 1e-9:
         d = min(step_m, length_m - md)
         md += d
-        az = wrap_az(az + drift_per100*(d/100.0))
-        dip = clamp(dip + lift_per100*(d/100.0), -90.0, 90.0)
+        az, dip = step_orientation(az, dip, d, lift_per100, drift_per100)
         stations.append({"MD": md, "Azimuth": az, "Angle": dip})
     return stations
 
 def extend_actual(stations, to_depth, step_m, lift_per100, drift_per100):
-    # same convention as planned: dip += lift*(d/100)
     if not stations:
         return stations
     stations = sorted(stations, key=lambda d: float(d["MD"]))
@@ -117,13 +156,11 @@ def extend_actual(stations, to_depth, step_m, lift_per100, drift_per100):
     while md < to_depth - 1e-9:
         d = min(step_m, to_depth - md)
         md += d
-        az = wrap_az(az + drift_per100*(d/100.0))
-        dip = clamp(dip + lift_per100*(d/100.0), -90.0, 90.0)
+        az, dip = step_orientation(az, dip, d, lift_per100, drift_per100)
         stations.append({"MD": md, "Azimuth": az, "Angle": dip})
     return stations
 
 def trim_to_md(stations, target_md):
-    # trim stations to target_md by interpolating az/dip within the segment that crosses target_md
     if not stations:
         return stations
     sta = sorted(stations, key=lambda d: float(d["MD"]))
@@ -147,7 +184,6 @@ def trim_to_md(stations, target_md):
     return sta
 
 def derive_lift_drift_last3(stations):
-    # lift and drift are slopes of dip and azimuth vs MD, normalized per 100 m
     if len(stations) < 3:
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
@@ -160,7 +196,6 @@ def derive_lift_drift_last3(stations):
     return float(lift_deg_per_m*100.0), float(drift_deg_per_m*100.0)
 
 def strike_dip_to_axes(strike_deg, dip_deg_signed):
-    # X East, Y North, Z Up. Strike cw from North. Dip-from-horizontal, negative down.
     strike = np.deg2rad(wrap_az(strike_deg))
     dip_abs = np.deg2rad(abs(dip_deg_signed))
     s_hat = np.array([np.sin(strike), np.cos(strike), 0.0])  # along strike
@@ -208,6 +243,7 @@ def parse_csv_flexible(file):
     for c in ["MD","Azimuth","Angle"]:
         out[c] = pd.to_numeric(out[c], errors="coerce")
     out = out.dropna(subset=["MD","Azimuth","Angle"])
+    out["Azimuth"] = out["Azimuth"] % 360.0
     return out
 
 def point_at_md(X, Y, Z, MDs, target_md):
@@ -224,7 +260,6 @@ def point_at_md(X, Y, Z, MDs, target_md):
     return np.array([x, y, z])
 
 def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=None):
-    # if smallest MD > 0, insert MD=0; if use_planned True use planned az/dip, else copy first survey
     if not stations:
         return stations
     stations = sorted(stations, key=lambda d: float(d["MD"]))
@@ -234,16 +269,15 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
         az0, dip0 = float(plan_az0), float(plan_dip0)
     else:
         az0, dip0 = float(stations[0]["Azimuth"]), float(stations[0]["Angle"])
-    stations.insert(0, {"MD": 0.0, "Azimuth": az0, "Angle": dip0})
+    stations.insert(0, {"MD": 0.0, "Azimuth": wrap_az(az0), "Angle": clamp(dip0, -90.0, 90.0)})
     return stations
 
 def local_rates_per100(stations):
-    # returns MD_mid, lift_per100, drift_per100 arrays from adjacent station deltas
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
         return np.array([]), np.array([]), np.array([])
     MD = np.array([float(s["MD"]) for s in sta], float)
-    AZ = np.array([float(s["Azimuth"]) for s in sta], float)
+    AZ = np.array([wrap_az(float(s["Azimuth"])) for s in sta], float)
     DIP = np.array([float(s["Angle"]) for s in sta], float)
     AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
     dMD = MD[1:] - MD[:-1]
@@ -295,10 +329,15 @@ with colC:
     plan_lift = st.number_input("Planned lift deg/100m", value=st.session_state.plan_lift, step=0.1, key="plan_lift")
     plan_drift = st.number_input("Planned drift deg/100m", value=st.session_state.plan_drift, step=0.1, key="plan_drift")
 
-# compute planned
-planned_stations = make_planned_stations(st.session_state.plan_len, st.session_state.step_m,
-                                         st.session_state.plan_az0, st.session_state.plan_dip0,
-                                         st.session_state.plan_lift, st.session_state.plan_drift)
+# compute planned with constant-dogleg and pole-wrap
+planned_stations = make_planned_stations(
+    st.session_state.plan_len,
+    st.session_state.step_m,
+    st.session_state.plan_az0,
+    st.session_state.plan_dip0,
+    st.session_state.plan_lift,
+    st.session_state.plan_drift,
+)
 px, py, pz, pmd = min_curvature_path(planned_stations)
 plan_pts = np.column_stack([px, py, pz])
 
@@ -336,7 +375,7 @@ else:
     )
 
 actual_stations_base = [
-    {"MD": float(r["MD"]), "Azimuth": float(r["Azimuth"]), "Angle": float(r["Angle"])}
+    {"MD": float(r["MD"]), "Azimuth": wrap_az(float(r["Azimuth"])), "Angle": clamp(float(r["Angle"]), -90.0, 90.0)}
     for _, r in pd.DataFrame(df_in).dropna(subset=["MD","Azimuth","Angle"]).iterrows()
 ]
 
@@ -364,15 +403,17 @@ with colR3:
     actual_len = st.number_input("Actual hole length", value=float(st.session_state.actual_len),
                                  step=10.0, min_value=0.0, key="actual_len")
 
-# build actual to requested length: extend or trim
+# build actual to requested length: extend or trim, using same constant-dogleg stepping
 actual_stations = actual_stations_base.copy()
 if actual_stations:
     last_md = sorted(actual_stations, key=lambda d: d["MD"])[-1]["MD"]
     target_len = float(st.session_state.actual_len)
     eps = 1e-9
     if last_md < target_len - eps:
-        actual_stations = extend_actual(actual_stations, target_len, st.session_state.step_m,
-                                        st.session_state.rem_lift, st.session_state.rem_drift)
+        actual_stations = extend_actual(
+            actual_stations, target_len, st.session_state.step_m,
+            st.session_state.rem_lift, st.session_state.rem_drift
+        )
     elif last_md > target_len + eps:
         actual_stations = trim_to_md(actual_stations, target_len)
 
@@ -392,15 +433,21 @@ with colP3:
                                 min_value=0.0, max_value=float(st.session_state.plan_len), key="target_md")
 
 s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
-P0 = point_at_md(px, py, pz, pmd, target_md)  # plane passes through planned hole at this MD
+P0 = point_at_md(px, py, pz, pmd, target_md)
 
 # pierce points
+def find_plane_intersection(points_xyz, P0, n_hat):
+    for i in range(1, len(points_xyz)):
+        p = segment_plane_intersection(points_xyz[i-1], points_xyz[i], P0, n_hat)
+        if p is not None:
+            return p
+    return None
+
 pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
 pierce_act = find_plane_intersection(act_pts, P0, n_hat)
 
-# 3D view - orthographic projection and equal scaling
+# 3D view
 st.markdown("### 3D view")
-# bounds
 all_chunks = [plan_pts, act_pts, P0.reshape(1,3)]
 if pierce_plan is not None:
     all_chunks.append(pierce_plan.reshape(1,3))
@@ -418,7 +465,6 @@ xr = [xmin - pad, xmax + pad]
 yr = [ymin - pad, ymax + pad]
 zr = [zmin - pad, zmax + pad]
 
-# plane grid sized to cover the full cube
 cube_diag = np.linalg.norm([xr[1]-xr[0], yr[1]-yr[0], zr[1]-zr[0]])
 span = cube_diag
 uu, vv = np.meshgrid(np.linspace(-span, span, 30), np.linspace(-span, span, 30))
@@ -437,7 +483,7 @@ fig3d.add_trace(go.Surface(
 if pierce_plan is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[pierce_plan[0]], y=[pierce_plan[1]], z=[pierce_plan[2]],
-        mode="markers", name="Pierce planned", marker=dict(size=6, symbol="x")
+        mode="markers", name="Pierce planned", marker=dict(size=6), marker_symbol="x"
     ))
 if pierce_act is not None:
     fig3d.add_trace(go.Scatter3d(
@@ -471,6 +517,40 @@ fig3d.update_layout(
     margin=dict(l=0, r=0, b=0, t=0)
 )
 st.plotly_chart(fig3d, use_container_width=True)
+
+# Orientation plot: Azimuth and Dip vs measured depth (actual hole)
+st.markdown("### Azimuth and dip vs measured depth (actual hole)")
+fig_orient = go.Figure()
+if actual_stations:
+    sta = sorted(actual_stations, key=lambda d: float(d["MD"]))
+    MD = [float(s["MD"]) for s in sta]
+    DIP = [float(s["Angle"]) for s in sta]
+    AZ = [wrap_az(float(s["Azimuth"])) for s in sta]
+    AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
+    fig_orient.add_trace(go.Scatter(x=MD, y=DIP, mode="lines+markers", name="Dip deg (negative down)", yaxis="y1"))
+    fig_orient.add_trace(go.Scatter(x=MD, y=AZu, mode="lines+markers", name="Azimuth deg (unwrapped)", yaxis="y2"))
+fig_orient.update_layout(
+    margin=dict(l=0, r=0, b=0, t=10),
+    xaxis=dict(title="Measured depth along actual hole m"),
+    yaxis=dict(title="Dip deg", range=[-90, 90]),
+    yaxis2=dict(title="Azimuth deg", overlaying="y", side="right"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+)
+st.plotly_chart(fig_orient, use_container_width=True)
+
+# Plan view X-Y
+st.markdown("### Plan view X-Y")
+fig_plan = go.Figure()
+fig_plan.add_trace(go.Scatter(x=px, y=py, mode="lines", name="Planned"))
+fig_plan.add_trace(go.Scatter(x=ax, y=ay, mode="lines", name="Actual"))
+fig_plan.update_layout(
+    xaxis_title="X East m",
+    yaxis_title="Y North m",
+    yaxis_scaleanchor="x",
+    yaxis_scaleratio=1,
+    margin=dict(l=0, r=0, b=0, t=10)
+)
+st.plotly_chart(fig_plan, use_container_width=True)
 
 # Per 100 m deviation plot
 st.markdown("### Per 100 m deviation along actual hole")
@@ -508,8 +588,8 @@ cfg_dict = {
     }
 }
 cfg_json = export_config(cfg_dict)
-with save_col:
+with st.expander("Export session", expanded=False):
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Notes: angles are dip-from-horizontal. Negative values point down. Lift is change of dip per 100 m. Drift is change of azimuth per 100 m. Orthographic projection with equal scaling is applied.")
+st.caption("Angles are dip-from-horizontal (negative down). Constant-dogleg stepping is applied with az drift scaled by 1/cos(|dip|). Pole-wrap at ±90 keeps direction continuous. 3D view uses orthographic projection with equal scaling.")
