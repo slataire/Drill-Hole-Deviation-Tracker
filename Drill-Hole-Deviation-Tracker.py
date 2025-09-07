@@ -63,8 +63,7 @@ def clamp(v, vmin, vmax):
 
 def normalize_dip_az(dip, az):
     """
-    Keep dip in [-90, 90] and adjust az by 180 when crossing a pole so the
-    physical direction stays continuous.
+    Keep dip in [-90, 90] and adjust az by 180 when crossing a pole.
 
     Convention:
     - Azimuth clockwise from north in horizontal plane.
@@ -91,7 +90,7 @@ def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
     Z is positive up, azimuth is clockwise from north in the horizontal plane.
     """
     az = np.deg2rad(wrap_az(az_deg))
-    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative means down
+    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative down
     ch = np.cos(elev)           # horizontal magnitude
     E = ch * np.sin(az)
     N = ch * np.cos(az)
@@ -129,16 +128,14 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
 
     Implementation:
     - Lift: rotate toward +Z about axis = normalize(cross(v, +Z)).
-    - Drift: rotate about -Z (clockwise) and scale by 1/cos(elev) so the motion on the sphere is uniform.
+    - Drift: rotate about -Z (clockwise).
+    - Drift is interpreted as azimuth change per 100 m, independent of elevation.
     """
     v = _unit_vec_from_az_dip(az, dip)
 
-    elev = np.arcsin(np.clip(v[2], -1.0, 1.0))
-    cos_e = max(np.cos(elev), 1e-12)
-
     # small rotation magnitudes for this step
     dtheta = np.deg2rad(lift_per100) * (d / 100.0)          # + lift -> up
-    dpsi   = np.deg2rad(drift_per100) * (d / 100.0) / cos_e # magnitude
+    dpsi   = np.deg2rad(drift_per100) * (d / 100.0)         # + drift -> clockwise az
 
     z_hat = np.array([0.0, 0.0, 1.0])
 
@@ -146,7 +143,7 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
     axis_lift = np.cross(v, z_hat)
     n_axis = np.linalg.norm(axis_lift)
     if n_axis < 1e-12:
-        # v is nearly vertical, pick any horizontal axis to continue the great-circle
+        # nearly vertical, pick any horizontal axis to continue the great-circle
         axis_lift = np.array([1.0, 0.0, 0.0])
     else:
         axis_lift /= n_axis
@@ -163,6 +160,9 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
         v_new = v
 
     az_new, dip_new = _vector_to_az_dip(v_new)
+    # near-vertical guard to avoid az jumps
+    if np.hypot(v_new[0], v_new[1]) < 1e-8:
+        az_new = az
     return az_new, dip_new
 
 def min_curvature_path(stations):
@@ -248,15 +248,19 @@ def trim_to_md(stations, target_md):
 # ---------------- Pole-safe rate derivation helpers -------------------
 def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
     """
-    Bearing change from v1 to v2 in the horizontal plane.
+    Horizontal bearing change from v1 to v2.
     Positive return value means clockwise rotation.
-    FIX: negate the standard atan2(cross, dot) so that positive = clockwise.
+    Near-vertical guard avoids noise when horizontal projection is tiny.
     """
     E1, N1 = v1[0], v1[1]
     E2, N2 = v2[0], v2[1]
+    h1 = E1*E1 + N1*N1
+    h2 = E2*E2 + N2*N2
+    if h1 < 1e-10 or h2 < 1e-10:
+        return 0.0
     cross_h = E1 * N2 - N1 * E2    # positive for CCW in EN plane
     dot_h = E1 * E2 + N1 * N2
-    return float(-np.arctan2(cross_h, dot_h))  # FIX: sign flip to make positive = clockwise
+    return float(-np.arctan2(cross_h, dot_h))  # sign flip so positive = clockwise
 
 def _polesafe_elevation_deg(v: np.ndarray) -> float:
     return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
@@ -264,7 +268,7 @@ def _polesafe_elevation_deg(v: np.ndarray) -> float:
 def derive_lift_drift_last3(stations):
     """
     Pole-safe estimate from the last 3 surveys.
-    Returns (lift_deg_per_100m, drift_deg_per_100m) where positive drift = clockwise.
+    Returns (lift_deg_per_100m, drift_deg_per_100m) with positive drift = clockwise.
     """
     if len(stations) < 3:
         return None, None
@@ -274,10 +278,10 @@ def derive_lift_drift_last3(stations):
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
     elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], dtype=float)
 
-    # Build unwrapped horizontal heading using pole-safe deltas
+    # Build unwrapped heading using pole-safe deltas
     heading = [0.0]
     for i in range(1, len(vecs)):
-        dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])  # already positive = CW
+        dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])  # positive = clockwise
         heading.append(heading[-1] + np.rad2deg(dpsi))
     heading = np.array(heading, dtype=float)
 
@@ -383,7 +387,6 @@ def local_rates_per100(stations):
     elev2 = np.array([_polesafe_elevation_deg(v) for v in vecs[1:]], float)
     d_elev = elev2 - elev1
 
-    # FIX: _polesafe_bearing_delta_rad already returns positive for clockwise
     d_bear = np.array([_polesafe_bearing_delta_rad(vecs[i], vecs[i+1]) for i in range(len(vecs) - 1)], float)
     d_bear_deg = np.rad2deg(d_bear)
 
@@ -633,7 +636,6 @@ if actual_stations:
     AZ = [wrap_az(float(s["Azimuth"])) for s in sta]
     AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
     if len(AZu) > 0:
-        # FIX: match visual scale size - set azimuth axis to same span as dip axis (180 deg)
         az_center = float(np.median(AZu))
     fig_orient.add_trace(go.Scatter(x=MD, y=DIP, mode="lines+markers", name="Dip deg (negative down)", yaxis="y1"))
     fig_orient.add_trace(go.Scatter(x=MD, y=AZu, mode="lines+markers", name="Azimuth deg (unwrapped)", yaxis="y2"))
@@ -654,8 +656,7 @@ fig_orient.update_layout(
         title="Azimuth deg",
         overlaying="y",
         side="right",
-        # FIX: force same size scale as dip axis by using a 180 deg window
-        range=[az_center - 90.0, az_center + 90.0],
+        range=[az_center - 90.0, az_center + 90.0],  # same 180 deg span as dip axis
         showgrid=True,
         gridcolor="#e6f2ff",
         zeroline=True,
