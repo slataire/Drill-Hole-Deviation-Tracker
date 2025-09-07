@@ -85,6 +85,19 @@ def normalize_dip_az(dip, az):
 
     return wrap_az(az), clamp(dip, -90.0, 90.0)
 
+def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
+    """
+    Convert azimuth and dip-from-horizontal (negative down) to a unit vector [E, N, Z].
+    Z is positive up, azimuth is clockwise from north in the horizontal plane.
+    """
+    az = np.deg2rad(wrap_az(az_deg))
+    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative means down
+    ch = np.cos(elev)           # horizontal magnitude
+    E = ch * np.sin(az)
+    N = ch * np.cos(az)
+    Z = np.sin(elev)
+    return np.array([E, N, Z], dtype=float)
+
 def step_orientation(az, dip, d, lift_per100, drift_per100):
     """
     Constant-dogleg stepping.
@@ -102,34 +115,36 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
     return az_new, dip_new
 
 def min_curvature_path(stations):
-    # stations: list of dicts with MD, Azimuth, Angle (dip-from-horizontal, negative = down)
+    """
+    Vector-based minimum curvature that is robust to pole wraps.
+    Positions are integrated using unit direction vectors, so 180 jumps in az
+    from normalize_dip_az will not inject fake doglegs.
+    """
     if not stations:
         return np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0])
-    stations = sorted(stations, key=lambda d: float(d["MD"]))
-    MDs = np.array([float(s["MD"]) for s in stations], float)
-    AZs = np.deg2rad([wrap_az(float(s["Azimuth"])) for s in stations])
-    DIP = np.array([float(s["Angle"]) for s in stations], float)
-    # inclination-from-vertical magnitude; sign handled via SGN for vertical
-    INC = np.deg2rad(90.0 - np.abs(DIP))
-    SGN = np.where(DIP <= 0.0, -1.0, 1.0)  # negative dip means down
+
+    sta = sorted(stations, key=lambda d: float(d["MD"]))
+    MDs = np.array([float(s["MD"]) for s in sta], dtype=float)
+    vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
+
     X, Y, Z = [0.0], [0.0], [0.0]
     for i in range(1, len(MDs)):
-        dMD = MDs[i] - MDs[i-1]
+        dMD = MDs[i] - MDs[i - 1]
         if dMD <= 0:
             continue
-        inc1, inc2 = INC[i-1], INC[i]
-        az1, az2 = AZs[i-1], AZs[i]
-        s1, s2 = SGN[i-1], SGN[i]
-        cos_dog = np.sin(inc1)*np.sin(inc2)*np.cos(az2-az1) + np.cos(inc1)*np.cos(inc2)
-        cos_dog = float(np.clip(cos_dog, -1.0, 1.0))
+
+        v1 = vecs[i - 1]
+        v2 = vecs[i]
+
+        cos_dog = float(np.clip(np.dot(v1, v2), -1.0, 1.0))
         dog = np.arccos(cos_dog)
-        RF = 1.0 if dog < 1e-12 else (2.0/dog)*np.tan(dog/2.0)
-        dN = 0.5*dMD*(np.sin(inc1)*np.cos(az1) + np.sin(inc2)*np.cos(az2))*RF
-        dE = 0.5*dMD*(np.sin(inc1)*np.sin(az1) + np.sin(inc2)*np.sin(az2))*RF
-        dZ = 0.5*dMD*(s1*np.cos(inc1) + s2*np.cos(inc2))*RF  # Z up
-        X.append(X[-1] + dE)
-        Y.append(Y[-1] + dN)
-        Z.append(Z[-1] + dZ)
+        RF = 1.0 if dog < 1e-12 else (2.0 / dog) * np.tan(dog / 2.0)
+
+        dR = 0.5 * dMD * (v1 + v2) * RF
+        X.append(X[-1] + dR[0])
+        Y.append(Y[-1] + dR[1])
+        Z.append(Z[-1] + dR[2])
+
     return np.array(X), np.array(Y), np.array(Z), MDs
 
 def make_planned_stations(length_m, step_m, az0, dip0, lift_per100, drift_per100):
@@ -181,17 +196,51 @@ def trim_to_md(stations, target_md):
             return trimmed
     return sta
 
+# ---------------- Pole-safe rate derivation helpers -------------------
+def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
+    """
+    Signed horizontal bearing change from v1 to v2 around +Z.
+    Uses atan2 of 2D cross and dot of horizontal components to avoid unwrap.
+    """
+    E1, N1 = v1[0], v1[1]
+    E2, N2 = v2[0], v2[1]
+    cross_h = E1 * N2 - N1 * E2
+    dot_h = E1 * E2 + N1 * N2
+    return float(np.arctan2(cross_h, dot_h))
+
+def _polesafe_elevation_deg(v: np.ndarray) -> float:
+    """
+    Elevation equals dip-from-horizontal in this convention. Compute from Z.
+    """
+    return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
+
 def derive_lift_drift_last3(stations):
+    """
+    Pole-safe estimate from last 3 surveys.
+    Lift is slope of elevation vs MD. Drift is slope of horizontal bearing vs MD,
+    where bearing differences use pole-safe atan2 on horizontal components.
+    """
     if len(stations) < 3:
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
     MD = np.array([float(s["MD"]) for s in sta], float)
-    AZ = np.array([float(s["Azimuth"]) for s in sta], float)
-    DIP = np.array([float(s["Angle"]) for s in sta], float)
-    AZu = np.unwrap(np.deg2rad(AZ))
-    drift_deg_per_m = np.rad2deg(np.polyfit(MD, AZu, 1)[0])
-    lift_deg_per_m = np.polyfit(MD, DIP, 1)[0]
-    return float(lift_deg_per_m*100.0), float(drift_deg_per_m*100.0)
+    vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
+
+    elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], float)
+
+    # Build an unwrapped horizontal bearing series by cumulative safe deltas
+    heading = [0.0]
+    for i in range(1, len(vecs)):
+        dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])
+        heading.append(heading[-1] + np.rad2deg(dpsi))
+    heading = np.array(heading, float)
+
+    # Fit linear slopes deg per m
+    if np.allclose(MD.ptp(), 0.0):
+        return None, None
+    lift_deg_per_m = np.polyfit(MD, elev_deg, 1)[0]
+    drift_deg_per_m = np.polyfit(MD, heading, 1)[0]
+    return float(lift_deg_per_m * 100.0), float(drift_deg_per_m * 100.0)
 
 def strike_dip_to_axes(strike_deg, dip_deg_signed):
     strike = np.deg2rad(wrap_az(strike_deg))
@@ -271,19 +320,30 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
     return stations
 
 def local_rates_per100(stations):
+    """
+    Pole-safe per-100 m lift and drift.
+    - Lift: change in elevation angle derived from Z component.
+    - Drift: change in horizontal bearing using atan2 on horizontal cross and dot.
+    """
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
         return np.array([]), np.array([]), np.array([])
+
     MD = np.array([float(s["MD"]) for s in sta], float)
-    AZ = np.array([wrap_az(float(s["Azimuth"])) for s in sta], float)
-    DIP = np.array([float(s["Angle"]) for s in sta], float)
-    AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
+    vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
+
     dMD = MD[1:] - MD[:-1]
-    dDIP = DIP[1:] - DIP[:-1]
-    dAZ = AZu[1:] - AZu[:-1]
+    elev1 = np.array([_polesafe_elevation_deg(v) for v in vecs[:-1]], float)
+    elev2 = np.array([_polesafe_elevation_deg(v) for v in vecs[1:]], float)
+    d_elev = elev2 - elev1
+
+    d_bear = np.array([_polesafe_bearing_delta_rad(vecs[i], vecs[i+1]) for i in range(len(vecs) - 1)], float)
+    d_bear_deg = np.rad2deg(d_bear)
+
     with np.errstate(divide="ignore", invalid="ignore"):
-        lift = np.where(dMD != 0, dDIP / dMD * 100.0, 0.0)
-        drift = np.where(dMD != 0, dAZ / dMD * 100.0, 0.0)
+        lift = np.where(dMD != 0, d_elev / dMD * 100.0, 0.0)
+        drift = np.where(dMD != 0, d_bear_deg / dMD * 100.0, 0.0)
+
     MDm = 0.5*(MD[1:] + MD[:-1])
     return MDm, lift, drift
 
@@ -382,7 +442,7 @@ use_planned_zero = st.checkbox("Use Collar Az and Dip for 0", value=st.session_s
 actual_stations_base = ensure_zero_station(actual_stations_base, use_planned=use_planned_zero,
                                            plan_az0=st.session_state.plan_az0, plan_dip0=st.session_state.plan_dip0)
 
-# suggested lift/drift from last 3
+# suggested lift/drift from last 3 - now pole-safe
 sug_lift, sug_drift = derive_lift_drift_last3(actual_stations_base) if len(actual_stations_base) >= 3 else (None, None)
 
 st.markdown("#### Remaining average lift and drift after last survey")
@@ -434,6 +494,13 @@ s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
 P0 = point_at_md(px, py, pz, pmd, target_md)
 
 # pierce points
+def find_plane_intersection(points_xyz, P0, n_hat):
+    for i in range(1, len(points_xyz)):
+        p = segment_plane_intersection(points_xyz[i-1], points_xyz[i], P0, n_hat)
+        if p is not None:
+            return p
+    return None
+
 pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
 pierce_act = find_plane_intersection(act_pts, P0, n_hat)
 
@@ -521,11 +588,9 @@ if actual_stations:
     fig_orient.add_trace(go.Scatter(x=MD, y=DIP, mode="lines+markers", name="Dip deg (negative down)", yaxis="y1"))
     fig_orient.add_trace(go.Scatter(x=MD, y=AZu, mode="lines+markers", name="Azimuth deg (unwrapped)", yaxis="y2"))
 
-# set different coloured horizontal gridlines for dip and azimuth axes
 fig_orient.update_layout(
     margin=dict(l=0, r=0, b=0, t=10),
     xaxis=dict(title="Measured depth along actual hole m"),
-    # primary y axis - dip
     yaxis=dict(
         title="Dip deg",
         range=[-90, 90],
@@ -535,13 +600,12 @@ fig_orient.update_layout(
         zerolinecolor="#a0a0a0",
         layer="below traces"
     ),
-    # secondary y axis - azimuth
     yaxis2=dict(
         title="Azimuth deg",
         overlaying="y",
         side="right",
         showgrid=True,
-        gridcolor="#e6f2ff",  # light blue to distinguish from dip grid
+        gridcolor="#e6f2ff",
         zeroline=True,
         zerolinecolor="#99ccff",
         layer="below traces"
@@ -550,7 +614,7 @@ fig_orient.update_layout(
 )
 st.plotly_chart(fig_orient, use_container_width=True)
 
-# Per 100 m deviation plot
+# Per 100 m deviation plot - now pole-safe
 st.markdown("### Per 100 m deviation along actual hole")
 MDm, lift_series, drift_series = local_rates_per100(actual_stations) if actual_stations else (np.array([]), np.array([]), np.array([]))
 fig_rate = go.Figure()
@@ -590,4 +654,4 @@ with st.expander("Export session", expanded=False):
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Angles are dip-from-horizontal (negative down). Constant-dogleg stepping is applied with az drift scaled by 1/cos(|dip|). Pole-wrap at +-90 keeps direction continuous. 3D view uses orthographic projection with equal scaling.")
+st.caption("Angles are dip-from-horizontal (negative down). Constant-dogleg stepping is applied with az drift scaled by 1/cos(|dip|). Pole-safe min curvature and rate calculations avoid spikes at pole crossings.")
