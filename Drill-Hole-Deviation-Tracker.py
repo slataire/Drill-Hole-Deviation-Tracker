@@ -98,20 +98,65 @@ def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
     Z = np.sin(elev)
     return np.array([E, N, Z], dtype=float)
 
+def _vector_to_az_dip(v: np.ndarray):
+    """
+    Inverse of _unit_vec_from_az_dip.
+    """
+    v = np.asarray(v, dtype=float)
+    v = v / max(np.linalg.norm(v), 1e-12)
+    az = wrap_az(np.rad2deg(np.arctan2(v[0], v[1])))
+    dip = float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
+    return az, dip
+
+def _rodrigues_rotate(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
+    """
+    Rotate vector v around unit axis by angle_rad using Rodrigues formula.
+    """
+    v = np.asarray(v, float)
+    axis = np.asarray(axis, float)
+    a = axis / max(np.linalg.norm(axis), 1e-12)
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return v * c + np.cross(a, v) * s + a * np.dot(a, v) * (1.0 - c)
+
 def step_orientation(az, dip, d, lift_per100, drift_per100):
     """
-    Constant-dogleg stepping.
-    - lift_per100: change of dip-from-horizontal, deg per 100 m (negative down).
-    - drift_per100: nominal azimuth change, deg per 100 m.
-    We scale az step by 1/cos(|dip|) so the rotation on the unit sphere is uniform.
+    Vector stepping with a composed small 3D rotation.
+    - lift_per100: change of dip-from-horizontal, deg per 100 m (negative down)
+    - drift_per100: azimuth change, deg per 100 m
+    Drift is scaled by 1/cos(elev) so the rotation on the unit sphere is uniform.
     """
-    d_dip = lift_per100 * (d / 100.0)
-    cos_h = np.cos(np.deg2rad(abs(dip)))  # = sin(inclination-from-vertical)
-    scale = 1.0 / max(cos_h, 1e-9)
-    d_az = drift_per100 * (d / 100.0) * scale
-    az_new = az + d_az
-    dip_new = dip + d_dip
-    az_new, dip_new = normalize_dip_az(dip_new, az_new)
+    # current unit direction
+    v = _unit_vec_from_az_dip(az, dip)
+
+    # elevation from Z
+    elev = np.arcsin(np.clip(v[2], -1.0, 1.0))
+    cos_e = max(np.cos(elev), 1e-12)
+
+    # small rotation magnitudes for this step
+    dtheta = np.deg2rad(lift_per100) * (d / 100.0)           # lift about horizontal axis
+    dpsi   = np.deg2rad(drift_per100) * (d / 100.0) / cos_e  # drift about +Z
+
+    # axes
+    z_hat = np.array([0.0, 0.0, 1.0])  # drift axis
+    h = v.copy(); h[2] = 0.0
+    if np.linalg.norm(h) < 1e-12:
+        axis_lift = np.array([1.0, 0.0, 0.0])  # if vertical, pick fixed horizontal axis
+    else:
+        h /= np.linalg.norm(h)
+        axis_lift = np.cross(h, v)
+        axis_lift /= max(np.linalg.norm(axis_lift), 1e-12)
+
+    # compose as one equivalent rotation: small-angle sum
+    omega = dtheta * axis_lift + dpsi * z_hat
+    w = np.linalg.norm(omega)
+    if w > 0:
+        u = omega / w
+        v_new = _rodrigues_rotate(v, u, w)
+        v_new /= max(np.linalg.norm(v_new), 1e-12)
+    else:
+        v_new = v
+
+    az_new, dip_new = _vector_to_az_dip(v_new)
     return az_new, dip_new
 
 def min_curvature_path(stations):
@@ -387,7 +432,7 @@ with colC:
     plan_lift = st.number_input("Planned lift deg/100m", value=st.session_state.plan_lift, step=0.1, key="plan_lift")
     plan_drift = st.number_input("Planned drift deg/100m", value=st.session_state.plan_drift, step=0.1, key="plan_drift")
 
-# compute planned with constant-dogleg and pole-wrap
+# compute planned with vector-rotation stepping
 planned_stations = make_planned_stations(
     st.session_state.plan_len,
     st.session_state.step_m,
@@ -442,7 +487,7 @@ use_planned_zero = st.checkbox("Use Collar Az and Dip for 0", value=st.session_s
 actual_stations_base = ensure_zero_station(actual_stations_base, use_planned=use_planned_zero,
                                            plan_az0=st.session_state.plan_az0, plan_dip0=st.session_state.plan_dip0)
 
-# suggested lift/drift from last 3 - now pole-safe
+# suggested lift/drift from last 3 - pole-safe
 sug_lift, sug_drift = derive_lift_drift_last3(actual_stations_base) if len(actual_stations_base) >= 3 else (None, None)
 
 st.markdown("#### Remaining average lift and drift after last survey")
@@ -461,7 +506,7 @@ with colR3:
     actual_len = st.number_input("Actual hole length", value=float(st.session_state.actual_len),
                                  step=10.0, min_value=0.0, key="actual_len")
 
-# build actual to requested length: extend or trim, using same constant-dogleg stepping
+# build actual to requested length: extend or trim
 actual_stations = actual_stations_base.copy()
 if actual_stations:
     last_md = sorted(actual_stations, key=lambda d: d["MD"])[-1]["MD"]
@@ -494,17 +539,10 @@ s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
 P0 = point_at_md(px, py, pz, pmd, target_md)
 
 # pierce points
-def find_plane_intersection(points_xyz, P0, n_hat):
-    for i in range(1, len(points_xyz)):
-        p = segment_plane_intersection(points_xyz[i-1], points_xyz[i], P0, n_hat)
-        if p is not None:
-            return p
-    return None
-
 pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
 pierce_act = find_plane_intersection(act_pts, P0, n_hat)
 
-# 3D view - orthographic projection and equal scaling
+# 3D view with hard-equal axes extents
 st.markdown("### 3D view")
 all_chunks = [plan_pts, act_pts, P0.reshape(1,3)]
 if pierce_plan is not None:
@@ -512,19 +550,25 @@ if pierce_plan is not None:
 if pierce_act is not None:
     all_chunks.append(pierce_act.reshape(1,3))
 ALL = np.vstack(all_chunks)
+
 xmin, ymin, zmin = np.min(ALL, axis=0)
 xmax, ymax, zmax = np.max(ALL, axis=0)
 range_x = xmax - xmin
 range_y = ymax - ymin
 range_z = zmax - zmin
 max_span = max(range_x, range_y, range_z, 1.0)
-pad = max(0.25*max_span, 25.0)
-xr = [xmin - pad, xmax + pad]
-yr = [ymin - pad, ymax + pad]
-zr = [zmin - pad, zmax + pad]
 
-cube_diag = np.linalg.norm([xr[1]-xr[0], yr[1]-yr[0], zr[1]-zr[0]])
-span = cube_diag
+# symmetric equal ranges around centers so circles do not look like parabolas
+cx, cy, cz = (xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5
+half = 0.5 * max_span
+pad = max(0.25 * max_span, 25.0)
+L = half + pad
+xr = [cx - L, cx + L]
+yr = [cy - L, cy + L]
+zr = [cz - L, cz + L]
+
+# plane mesh sized to the same cube
+span = 2.0 * L
 uu, vv = np.meshgrid(np.linspace(-span, span, 30), np.linspace(-span, span, 30))
 plane_grid = P0.reshape(1,1,3) + uu[...,None]*s_hat.reshape(1,1,3) + vv[...,None]*d_hat.reshape(1,1,3)
 
@@ -614,7 +658,7 @@ fig_orient.update_layout(
 )
 st.plotly_chart(fig_orient, use_container_width=True)
 
-# Per 100 m deviation plot - now pole-safe
+# Per 100 m deviation plot - pole-safe
 st.markdown("### Per 100 m deviation along actual hole")
 MDm, lift_series, drift_series = local_rates_per100(actual_stations) if actual_stations else (np.array([]), np.array([]), np.array([]))
 fig_rate = go.Figure()
@@ -654,4 +698,4 @@ with st.expander("Export session", expanded=False):
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Angles are dip-from-horizontal (negative down). Constant-dogleg stepping is applied with az drift scaled by 1/cos(|dip|). Pole-safe min curvature and rate calculations avoid spikes at pole crossings.")
+st.caption("Angles are dip-from-horizontal (negative down). Vector-rotation stepping and equal 3D axes are used so constant-lift and constant-drift arcs appear as true circles.")
