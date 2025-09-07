@@ -93,11 +93,9 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
     We scale az step by 1/cos(|dip|) so the rotation on the unit sphere is uniform.
     """
     d_dip = lift_per100 * (d / 100.0)
-
     cos_h = np.cos(np.deg2rad(abs(dip)))  # = sin(inclination-from-vertical)
     scale = 1.0 / max(cos_h, 1e-9)
     d_az = drift_per100 * (d / 100.0) * scale
-
     az_new = az + d_az
     dip_new = dip + d_dip
     az_new, dip_new = normalize_dip_az(dip_new, az_new)
@@ -436,17 +434,10 @@ s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
 P0 = point_at_md(px, py, pz, pmd, target_md)
 
 # pierce points
-def find_plane_intersection(points_xyz, P0, n_hat):
-    for i in range(1, len(points_xyz)):
-        p = segment_plane_intersection(points_xyz[i-1], points_xyz[i], P0, n_hat)
-        if p is not None:
-            return p
-    return None
-
 pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
 pierce_act = find_plane_intersection(act_pts, P0, n_hat)
 
-# 3D view
+# 3D view - orthographic projection and equal scaling
 st.markdown("### 3D view")
 all_chunks = [plan_pts, act_pts, P0.reshape(1,3)]
 if pierce_plan is not None:
@@ -483,7 +474,7 @@ fig3d.add_trace(go.Surface(
 if pierce_plan is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[pierce_plan[0]], y=[pierce_plan[1]], z=[pierce_plan[2]],
-        mode="markers", name="Pierce planned", marker=dict(size=6), marker_symbol="x"
+        mode="markers", name="Pierce planned", marker=dict(size=6, symbol="x")
     ))
 if pierce_act is not None:
     fig3d.add_trace(go.Scatter3d(
@@ -529,28 +520,35 @@ if actual_stations:
     AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
     fig_orient.add_trace(go.Scatter(x=MD, y=DIP, mode="lines+markers", name="Dip deg (negative down)", yaxis="y1"))
     fig_orient.add_trace(go.Scatter(x=MD, y=AZu, mode="lines+markers", name="Azimuth deg (unwrapped)", yaxis="y2"))
+
+# set different coloured horizontal gridlines for dip and azimuth axes
 fig_orient.update_layout(
     margin=dict(l=0, r=0, b=0, t=10),
     xaxis=dict(title="Measured depth along actual hole m"),
-    yaxis=dict(title="Dip deg", range=[-90, 90]),
-    yaxis2=dict(title="Azimuth deg", overlaying="y", side="right"),
+    # primary y axis - dip
+    yaxis=dict(
+        title="Dip deg",
+        range=[-90, 90],
+        showgrid=True,
+        gridcolor="#d0d0d0",
+        zeroline=True,
+        zerolinecolor="#a0a0a0",
+        layer="below traces"
+    ),
+    # secondary y axis - azimuth
+    yaxis2=dict(
+        title="Azimuth deg",
+        overlaying="y",
+        side="right",
+        showgrid=True,
+        gridcolor="#e6f2ff",  # light blue to distinguish from dip grid
+        zeroline=True,
+        zerolinecolor="#99ccff",
+        layer="below traces"
+    ),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
 st.plotly_chart(fig_orient, use_container_width=True)
-
-# Plan view X-Y
-st.markdown("### Plan view X-Y")
-fig_plan = go.Figure()
-fig_plan.add_trace(go.Scatter(x=px, y=py, mode="lines", name="Planned"))
-fig_plan.add_trace(go.Scatter(x=ax, y=ay, mode="lines", name="Actual"))
-fig_plan.update_layout(
-    xaxis_title="X East m",
-    yaxis_title="Y North m",
-    yaxis_scaleanchor="x",
-    yaxis_scaleratio=1,
-    margin=dict(l=0, r=0, b=0, t=10)
-)
-st.plotly_chart(fig_plan, use_container_width=True)
 
 # Per 100 m deviation plot
 st.markdown("### Per 100 m deviation along actual hole")
@@ -592,4 +590,4 @@ with st.expander("Export session", expanded=False):
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Angles are dip-from-horizontal (negative down). Constant-dogleg stepping is applied with az drift scaled by 1/cos(|dip|). Pole-wrap at ±90 keeps direction continuous. 3D view uses orthographic projection with equal scaling.")
+st.caption("Angles are dip-from-horizontal (negative down). Constant-dogleg stepping is applied with az drift scaled by 1/cos(|dip|). Pole-wrap at +-90 keeps direction continuous. 3D view uses orthographic projection with equal scaling.")
