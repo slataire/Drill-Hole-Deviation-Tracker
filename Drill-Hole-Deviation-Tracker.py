@@ -120,35 +120,42 @@ def _rodrigues_rotate(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.n
 
 def step_orientation(az, dip, d, lift_per100, drift_per100):
     """
-    Vector stepping with a composed small 3D rotation.
-    - lift_per100: change of dip-from-horizontal, deg per 100 m (negative down)
-    - drift_per100: azimuth change, deg per 100 m
-    Drift is scaled by 1/cos(elev) so the rotation on the unit sphere is uniform.
+    Vector stepping on the unit sphere.
+
+    Conventions preserved:
+    - Dip is from horizontal. Negative is down.
+    - Positive lift increases dip (tilts direction upward).
+    - Positive drift turns clockwise in the horizontal plane.
+
+    Implementation:
+    - Lift: rotate toward +Z about axis = normalize(cross(v, +Z)).
+    - Drift: rotate about -Z (clockwise) and scale by 1/cos(elev) so the motion on the sphere is uniform.
     """
-    # current unit direction
     v = _unit_vec_from_az_dip(az, dip)
 
-    # elevation from Z
     elev = np.arcsin(np.clip(v[2], -1.0, 1.0))
     cos_e = max(np.cos(elev), 1e-12)
 
     # small rotation magnitudes for this step
-    dtheta = np.deg2rad(lift_per100) * (d / 100.0)           # lift about horizontal axis
-    dpsi   = np.deg2rad(drift_per100) * (d / 100.0) / cos_e  # drift about +Z
+    dtheta = np.deg2rad(lift_per100) * (d / 100.0)          # + lift -> up
+    dpsi   = np.deg2rad(drift_per100) * (d / 100.0) / cos_e # magnitude
 
-    # axes
-    z_hat = np.array([0.0, 0.0, 1.0])  # drift axis
-    h = v.copy(); h[2] = 0.0
-    if np.linalg.norm(h) < 1e-12:
-        axis_lift = np.array([1.0, 0.0, 0.0])  # if vertical, pick fixed horizontal axis
+    z_hat = np.array([0.0, 0.0, 1.0])
+
+    # lift axis is perpendicular to the plane spanned by v and +Z
+    axis_lift = np.cross(v, z_hat)
+    n_axis = np.linalg.norm(axis_lift)
+    if n_axis < 1e-12:
+        # v is nearly vertical, pick any horizontal axis to continue the great-circle
+        # using current azimuth direction if available
+        axis_lift = np.array([1.0, 0.0, 0.0])
     else:
-        h /= np.linalg.norm(h)
-        axis_lift = np.cross(h, v)
-        axis_lift /= max(np.linalg.norm(axis_lift), 1e-12)
+        axis_lift /= n_axis
 
-    # compose as one equivalent rotation: small-angle sum
-    omega = dtheta * axis_lift + dpsi * z_hat
+    # compose angular velocity vector: lift about axis_lift, drift clockwise about -Z
+    omega = dtheta * axis_lift - dpsi * z_hat
     w = np.linalg.norm(omega)
+
     if w > 0:
         u = omega / w
         v_new = _rodrigues_rotate(v, u, w)
@@ -161,9 +168,7 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
 
 def min_curvature_path(stations):
     """
-    Vector-based minimum curvature that is robust to pole wraps.
-    Positions are integrated using unit direction vectors, so 180 jumps in az
-    from normalize_dip_az will not inject fake doglegs.
+    Vector-based minimum curvature robust to pole wraps.
     """
     if not stations:
         return np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0])
@@ -243,10 +248,6 @@ def trim_to_md(stations, target_md):
 
 # ---------------- Pole-safe rate derivation helpers -------------------
 def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
-    """
-    Signed horizontal bearing change from v1 to v2 around +Z.
-    Uses atan2 of 2D cross and dot of horizontal components to avoid unwrap.
-    """
     E1, N1 = v1[0], v1[1]
     E2, N2 = v2[0], v2[1]
     cross_h = E1 * N2 - N1 * E2
@@ -254,17 +255,9 @@ def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
     return float(np.arctan2(cross_h, dot_h))
 
 def _polesafe_elevation_deg(v: np.ndarray) -> float:
-    """
-    Elevation equals dip-from-horizontal in this convention. Compute from Z.
-    """
     return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
 
 def derive_lift_drift_last3(stations):
-    """
-    Pole-safe estimate from last 3 surveys.
-    Lift is slope of elevation vs MD. Drift is slope of horizontal bearing vs MD,
-    where bearing differences use pole-safe atan2 on horizontal components.
-    """
     if len(stations) < 3:
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
@@ -273,14 +266,12 @@ def derive_lift_drift_last3(stations):
 
     elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], float)
 
-    # Build an unwrapped horizontal bearing series by cumulative safe deltas
     heading = [0.0]
     for i in range(1, len(vecs)):
         dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])
         heading.append(heading[-1] + np.rad2deg(dpsi))
     heading = np.array(heading, float)
 
-    # Fit linear slopes deg per m
     if np.allclose(MD.ptp(), 0.0):
         return None, None
     lift_deg_per_m = np.polyfit(MD, elev_deg, 1)[0]
@@ -365,11 +356,6 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
     return stations
 
 def local_rates_per100(stations):
-    """
-    Pole-safe per-100 m lift and drift.
-    - Lift: change in elevation angle derived from Z component.
-    - Drift: change in horizontal bearing using atan2 on horizontal cross and dot.
-    """
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
         return np.array([]), np.array([]), np.array([])
@@ -487,7 +473,7 @@ use_planned_zero = st.checkbox("Use Collar Az and Dip for 0", value=st.session_s
 actual_stations_base = ensure_zero_station(actual_stations_base, use_planned=use_planned_zero,
                                            plan_az0=st.session_state.plan_az0, plan_dip0=st.session_state.plan_dip0)
 
-# suggested lift/drift from last 3 - pole-safe
+# suggested lift/drift from last 3
 sug_lift, sug_drift = derive_lift_drift_last3(actual_stations_base) if len(actual_stations_base) >= 3 else (None, None)
 
 st.markdown("#### Remaining average lift and drift after last survey")
@@ -542,7 +528,7 @@ P0 = point_at_md(px, py, pz, pmd, target_md)
 pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
 pierce_act = find_plane_intersection(act_pts, P0, n_hat)
 
-# 3D view with hard-equal axes extents
+# 3D view with equal axes
 st.markdown("### 3D view")
 all_chunks = [plan_pts, act_pts, P0.reshape(1,3)]
 if pierce_plan is not None:
@@ -558,7 +544,7 @@ range_y = ymax - ymin
 range_z = zmax - zmin
 max_span = max(range_x, range_y, range_z, 1.0)
 
-# symmetric equal ranges around centers so circles do not look like parabolas
+# symmetric equal ranges around centers
 cx, cy, cz = (xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5
 half = 0.5 * max_span
 pad = max(0.25 * max_span, 25.0)
@@ -658,7 +644,7 @@ fig_orient.update_layout(
 )
 st.plotly_chart(fig_orient, use_container_width=True)
 
-# Per 100 m deviation plot - pole-safe
+# Per 100 m deviation plot
 st.markdown("### Per 100 m deviation along actual hole")
 MDm, lift_series, drift_series = local_rates_per100(actual_stations) if actual_stations else (np.array([]), np.array([]), np.array([]))
 fig_rate = go.Figure()
@@ -698,4 +684,4 @@ with st.expander("Export session", expanded=False):
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Angles are dip-from-horizontal (negative down). Vector-rotation stepping and equal 3D axes are used so constant-lift and constant-drift arcs appear as true circles.")
+st.caption("Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are true circles that loop through +/-90 smoothly.")
