@@ -30,7 +30,7 @@ def apply_cfg_to_session(cfg):
     st.session_state["plane_dip"]        = cfg.get("plane", {}).get("dip", st.session_state.get("plane_dip", -58.0))
     st.session_state["target_md"]        = cfg.get("plane", {}).get("target_md", st.session_state.get("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0)))
 
-# defaults so first render has keys
+# defaults
 st.session_state.setdefault("plan_len", 500.0)
 st.session_state.setdefault("step_m", 10.0)
 st.session_state.setdefault("plan_az0", 90.0)
@@ -45,7 +45,7 @@ st.session_state.setdefault("plane_strike", 114.0)
 st.session_state.setdefault("plane_dip", -58.0)
 st.session_state.setdefault("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0))
 
-# apply pending config before widgets are created
+# apply pending config before widgets
 if "pending_config" in st.session_state:
     apply_cfg_to_session(st.session_state.pop("pending_config"))
 
@@ -62,36 +62,21 @@ def clamp(v, vmin, vmax):
     return max(vmin, min(v, vmax))
 
 def normalize_dip_az(dip, az):
-    """
-    Keep dip in [-90, 90] and adjust az by 180 when crossing a pole so the
-    physical direction stays continuous.
-
-    Convention:
-    - Azimuth clockwise from north in horizontal plane.
-    - Dip from horizontal, negative down.
-    """
     az = float(az)
     dip = float(dip)
-
     while dip > 90.0:
         dip = 180.0 - dip
         dip = -dip
         az += 180.0
-
     while dip < -90.0:
         dip = -180.0 - dip
         dip = -dip
         az += 180.0
-
     return wrap_az(az), clamp(dip, -90.0, 90.0)
 
 def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
-    """
-    Convert azimuth and dip-from-horizontal (negative down) to a unit vector [E, N, Z].
-    Z positive up, az clockwise from north.
-    """
     az = np.deg2rad(wrap_az(az_deg))
-    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative means down
+    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative down
     ch = np.cos(elev)
     E = ch * np.sin(az)
     N = ch * np.cos(az)
@@ -118,10 +103,8 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
     Drift is azimuth change per 100 m, independent of elevation.
     """
     v = _unit_vec_from_az_dip(az, dip)
-
-    dtheta = np.deg2rad(lift_per100) * (d / 100.0)   # + lift -> up
-    dpsi   = np.deg2rad(drift_per100) * (d / 100.0)  # + drift -> clockwise az
-
+    dtheta = np.deg2rad(lift_per100) * (d / 100.0)
+    dpsi   = np.deg2rad(drift_per100) * (d / 100.0)
     z_hat = np.array([0.0, 0.0, 1.0])
 
     axis_lift = np.cross(v, z_hat)
@@ -149,28 +132,23 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
 def min_curvature_path(stations):
     if not stations:
         return np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0])
-
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     MDs = np.array([float(s["MD"]) for s in sta], dtype=float)
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
-
     X, Y, Z = [0.0], [0.0], [0.0]
     for i in range(1, len(MDs)):
         dMD = MDs[i] - MDs[i - 1]
         if dMD <= 0:
             continue
-
         v1 = vecs[i - 1]
         v2 = vecs[i]
         cos_dog = float(np.clip(np.dot(v1, v2), -1.0, 1.0))
         dog = np.arccos(cos_dog)
         RF = 1.0 if dog < 1e-12 else (2.0 / dog) * np.tan(dog / 2.0)
-
         dR = 0.5 * dMD * (v1 + v2) * RF
         X.append(X[-1] + dR[0])
         Y.append(Y[-1] + dR[1])
         Z.append(Z[-1] + dR[2])
-
     return np.array(X), np.array(Y), np.array(Z), MDs
 
 def make_planned_stations(length_m, step_m, az0, dip0, lift_per100, drift_per100):
@@ -222,13 +200,8 @@ def trim_to_md(stations, target_md):
             return trimmed
     return sta
 
-# ---------------- Pole-safe rate derivation helpers -------------------
+# Pole-safe rate derivation helpers
 def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
-    """
-    Horizontal bearing change from v1 to v2.
-    Positive return value means clockwise.
-    Near-vertical guard avoids noise when horizontal projection is tiny.
-    """
     E1, N1 = v1[0], v1[1]
     E2, N2 = v2[0], v2[1]
     h1 = E1*E1 + N1*N1
@@ -243,25 +216,19 @@ def _polesafe_elevation_deg(v: np.ndarray) -> float:
     return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
 
 def derive_lift_drift_last3(stations):
-    """
-    Returns (lift_deg_per_100m, drift_deg_per_100m), positive drift = clockwise.
-    """
     if len(stations) < 3:
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
     MD = np.array([float(s["MD"]) for s in sta], dtype=float)
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
     elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], dtype=float)
-
     heading = [0.0]
     for i in range(1, len(vecs)):
         dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])
         heading.append(heading[-1] + np.rad2deg(dpsi))
     heading = np.array(heading, dtype=float)
-
     if not np.isfinite(np.ptp(MD)) or np.ptp(MD) < 1e-9:
         return None, None
-
     lift_deg_per_m = np.polyfit(MD, elev_deg, 1)[0]
     drift_deg_per_m = np.polyfit(MD, heading, 1)[0]
     return float(lift_deg_per_m * 100.0), float(drift_deg_per_m * 100.0)
@@ -343,30 +310,20 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
     return stations
 
 def local_rates_per100(stations):
-    """
-    Per-100 m lift and drift.
-    - Lift from elevation change.
-    - Drift from bearing change (positive = clockwise).
-    """
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
         return np.array([]), np.array([]), np.array([])
-
     MD = np.array([float(s["MD"]) for s in sta], float)
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
-
     dMD = MD[1:] - MD[:-1]
     elev1 = np.array([_polesafe_elevation_deg(v) for v in vecs[:-1]], float)
     elev2 = np.array([_polesafe_elevation_deg(v) for v in vecs[1:]], float)
     d_elev = elev2 - elev1
-
     d_bear = np.array([_polesafe_bearing_delta_rad(vecs[i], vecs[i+1]) for i in range(len(vecs) - 1)], float)
     d_bear_deg = np.rad2deg(d_bear)
-
     with np.errstate(divide="ignore", invalid="ignore"):
         lift = np.where(dMD != 0, d_elev / dMD * 100.0, 0.0)
         drift = np.where(dMD != 0, d_bear_deg / dMD * 100.0, 0.0)
-
     MDm = 0.5*(MD[1:] + MD[:-1])
     return MDm, lift, drift
 
@@ -392,7 +349,6 @@ with st.expander("Save or load session"):
                     st.error(f"Could not parse session JSON: {e}")
     with save_col:
         st.caption("Download a JSON snapshot of everything on this page")
-        # New: allow saving from here too, after page has created a JSON below
         if "latest_export_json" in st.session_state:
             st.download_button(
                 "Download current session JSON",
@@ -579,6 +535,12 @@ if pierce_act is not None:
         x=[pierce_act[0]], y=[pierce_act[1]], z=[pierce_act[2]],
         mode="markers", name="Pierce actual", marker=dict(size=6)
     ))
+
+# watermark legend entry
+fig3d.add_trace(go.Scatter3d(x=[None], y=[None], z=[None], mode="markers",
+                             marker=dict(size=0),
+                             name="App by Evan Slater", showlegend=True))
+
 if pierce_plan is not None and pierce_act is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[pierce_plan[0], pierce_act[0]],
@@ -603,14 +565,20 @@ fig3d.update_layout(
         eye=dict(x=1.8, y=1.8, z=1.2),
         projection=dict(type="orthographic")
     ),
+    legend=dict(
+        x=0.99, y=0.99, xanchor="right", yanchor="top",
+        bgcolor="rgba(255,255,255,0.6)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1
+    ),
     margin=dict(l=0, r=0, b=0, t=0)
 )
 st.plotly_chart(fig3d, use_container_width=True)
 
-# Orientation plot
+# Orientation plot: Azimuth and Dip vs measured depth (actual hole) with +-15 deg window
 st.markdown("### Azimuth and dip vs measured depth (actual hole)")
 fig_orient = go.Figure()
-az_center = 0.0
+az_center = float(st.session_state.plan_az0)
+dip_center = float(st.session_state.plan_dip0)
+
 if actual_stations:
     sta = sorted(actual_stations, key=lambda d: float(d["MD"]))
     MD = [float(s["MD"]) for s in sta]
@@ -618,16 +586,24 @@ if actual_stations:
     AZ = [wrap_az(float(s["Azimuth"])) for s in sta]
     AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
     if len(AZu) > 0:
-        az_center = float(np.median(AZu))
+        az_center = float(AZu[0])
+    if len(DIP) > 0:
+        dip_center = float(DIP[0])
+
     fig_orient.add_trace(go.Scatter(x=MD, y=DIP, mode="lines+markers", name="Dip deg (negative down)", yaxis="y1"))
     fig_orient.add_trace(go.Scatter(x=MD, y=AZu, mode="lines+markers", name="Azimuth deg (unwrapped)", yaxis="y2"))
+
+# watermark legend entry
+fig_orient.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
+                                marker=dict(size=0),
+                                name="App by Evan Slater", showlegend=True))
 
 fig_orient.update_layout(
     margin=dict(l=0, r=0, b=0, t=10),
     xaxis=dict(title="Measured depth along actual hole m"),
     yaxis=dict(
         title="Dip deg",
-        range=[-90, 90],
+        range=[clamp(dip_center - 15.0, -90.0, 90.0), clamp(dip_center + 15.0, -90.0, 90.0)],
         showgrid=True,
         gridcolor="#d0d0d0",
         zeroline=True,
@@ -638,42 +614,41 @@ fig_orient.update_layout(
         title="Azimuth deg",
         overlaying="y",
         side="right",
-        range=[az_center - 90.0, az_center + 90.0],  # same 180 deg span as dip axis
+        range=[az_center - 15.0, az_center + 15.0],
         showgrid=True,
         gridcolor="#e6f2ff",
         zeroline=True,
         zerolinecolor="#99ccff",
         layer="below traces"
     ),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    legend=dict(
+        x=0.99, y=0.99, xanchor="right", yanchor="top",
+        bgcolor="rgba(255,255,255,0.6)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1
+    )
 )
 st.plotly_chart(fig_orient, use_container_width=True)
 
-# Per 100 m deviation plot - tighter ranges around collar plan values
+# Per 100 m deviation plot (original behavior)
 st.markdown("### Per 100 m deviation along actual hole")
 MDm, lift_series, drift_series = local_rates_per100(actual_stations) if actual_stations else (np.array([]), np.array([]), np.array([]))
 fig_rate = go.Figure()
 if len(MDm) > 0:
-    fig_rate.add_trace(go.Scatter(x=MDm, y=lift_series, mode="lines+markers", name="Lift deg/100m", yaxis="y1"))
-    fig_rate.add_trace(go.Scatter(x=MDm, y=drift_series, mode="lines+markers", name="Drift deg/100m", yaxis="y2"))
+    fig_rate.add_trace(go.Scatter(x=MDm, y=lift_series, mode="lines+markers", name="Lift deg/100m"))
+    fig_rate.add_trace(go.Scatter(x=MDm, y=drift_series, mode="lines+markers", name="Drift deg/100m"))
 
-lift_center = float(st.session_state.plan_lift)
-drift_center = float(st.session_state.plan_drift)
+# watermark legend entry
+fig_rate.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
+                              marker=dict(size=0),
+                              name="App by Evan Slater", showlegend=True))
 
 fig_rate.update_layout(
     xaxis_title="Measured depth along actual hole m",
-    yaxis=dict(
-        title="Lift deg/100 m",
-        range=[lift_center - 15.0, lift_center + 15.0]
+    yaxis_title="deg per 100 m",
+    legend=dict(
+        x=0.99, y=0.99, xanchor="right", yanchor="top",
+        bgcolor="rgba(255,255,255,0.6)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1
     ),
-    yaxis2=dict(
-        title="Drift deg/100 m",
-        overlaying="y",
-        side="right",
-        range=[drift_center - 15.0, drift_center + 15.0]
-    ),
-    margin=dict(l=0, r=0, b=0, t=10),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    margin=dict(l=0, r=0, b=0, t=10)
 )
 st.plotly_chart(fig_rate, use_container_width=True)
 
