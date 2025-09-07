@@ -30,7 +30,7 @@ def apply_cfg_to_session(cfg):
     st.session_state["plane_dip"]        = cfg.get("plane", {}).get("dip", st.session_state.get("plane_dip", -58.0))
     st.session_state["target_md"]        = cfg.get("plane", {}).get("target_md", st.session_state.get("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0)))
 
-# set defaults so first render has keys
+# defaults so first render has keys
 st.session_state.setdefault("plan_len", 500.0)
 st.session_state.setdefault("step_m", 10.0)
 st.session_state.setdefault("plan_az0", 90.0)
@@ -122,7 +122,7 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
     """
     Vector stepping on the unit sphere.
 
-    Conventions preserved:
+    Conventions:
     - Dip is from horizontal. Negative is down.
     - Positive lift increases dip (tilts direction upward).
     - Positive drift turns clockwise in the horizontal plane.
@@ -147,7 +147,6 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
     n_axis = np.linalg.norm(axis_lift)
     if n_axis < 1e-12:
         # v is nearly vertical, pick any horizontal axis to continue the great-circle
-        # using current azimuth direction if available
         axis_lift = np.array([1.0, 0.0, 0.0])
     else:
         axis_lift /= n_axis
@@ -258,22 +257,29 @@ def _polesafe_elevation_deg(v: np.ndarray) -> float:
     return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
 
 def derive_lift_drift_last3(stations):
+    """
+    Pole-safe estimate from the last 3 surveys.
+    Returns (lift_deg_per_100m, drift_deg_per_100m) or (None, None).
+    """
     if len(stations) < 3:
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
-    MD = np.array([float(s["MD"]) for s in sta], float)
+    MD = np.array([float(s["MD"]) for s in sta], dtype=float)
+
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
+    elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], dtype=float)
 
-    elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], float)
-
+    # Build unwrapped horizontal bearing using safe deltas
     heading = [0.0]
     for i in range(1, len(vecs)):
         dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])
         heading.append(heading[-1] + np.rad2deg(dpsi))
-    heading = np.array(heading, float)
+    heading = np.array(heading, dtype=float)
 
-    if np.allclose(MD.ptp(), 0.0):
+    # NumPy 2.0: use np.ptp and guard zero range
+    if not np.isfinite(np.ptp(MD)) or np.ptp(MD) < 1e-9:
         return None, None
+
     lift_deg_per_m = np.polyfit(MD, elev_deg, 1)[0]
     drift_deg_per_m = np.polyfit(MD, heading, 1)[0]
     return float(lift_deg_per_m * 100.0), float(drift_deg_per_m * 100.0)
@@ -356,6 +362,11 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
     return stations
 
 def local_rates_per100(stations):
+    """
+    Pole-safe per-100 m lift and drift.
+    - Lift: change in elevation angle derived from Z component.
+    - Drift: change in horizontal bearing using atan2 on horizontal cross and dot.
+    """
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
         return np.array([]), np.array([]), np.array([])
@@ -684,4 +695,4 @@ with st.expander("Export session", expanded=False):
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are true circles that loop through +/-90 smoothly.")
+st.caption("Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are circles that loop through +/-90 smoothly.")
