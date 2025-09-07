@@ -63,7 +63,8 @@ def clamp(v, vmin, vmax):
 
 def normalize_dip_az(dip, az):
     """
-    Keep dip in [-90, 90] and adjust az by 180 when crossing a pole.
+    Keep dip in [-90, 90] and adjust az by 180 when crossing a pole so the
+    physical direction stays continuous.
 
     Convention:
     - Azimuth clockwise from north in horizontal plane.
@@ -87,20 +88,17 @@ def normalize_dip_az(dip, az):
 def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
     """
     Convert azimuth and dip-from-horizontal (negative down) to a unit vector [E, N, Z].
-    Z is positive up, azimuth is clockwise from north in the horizontal plane.
+    Z positive up, az clockwise from north.
     """
     az = np.deg2rad(wrap_az(az_deg))
-    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative down
-    ch = np.cos(elev)           # horizontal magnitude
+    elev = np.deg2rad(dip_deg)  # dip-from-horizontal, negative means down
+    ch = np.cos(elev)
     E = ch * np.sin(az)
     N = ch * np.cos(az)
     Z = np.sin(elev)
     return np.array([E, N, Z], dtype=float)
 
 def _vector_to_az_dip(v: np.ndarray):
-    """
-    Inverse of _unit_vec_from_az_dip.
-    """
     v = np.asarray(v, dtype=float)
     v = v / max(np.linalg.norm(v), 1e-12)
     az = wrap_az(np.rad2deg(np.arctan2(v[0], v[1])))
@@ -108,9 +106,6 @@ def _vector_to_az_dip(v: np.ndarray):
     return az, dip
 
 def _rodrigues_rotate(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
-    """
-    Rotate vector v around unit axis by angle_rad using Rodrigues formula.
-    """
     v = np.asarray(v, float)
     axis = np.asarray(axis, float)
     a = axis / max(np.linalg.norm(axis), 1e-12)
@@ -119,36 +114,23 @@ def _rodrigues_rotate(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.n
 
 def step_orientation(az, dip, d, lift_per100, drift_per100):
     """
-    Vector stepping on the unit sphere.
-
-    Conventions:
-    - Dip is from horizontal. Negative is down.
-    - Positive lift increases dip (tilts direction upward).
-    - Positive drift turns clockwise in the horizontal plane.
-
-    Implementation:
-    - Lift: rotate toward +Z about axis = normalize(cross(v, +Z)).
-    - Drift: rotate about -Z (clockwise).
-    - Drift is interpreted as azimuth change per 100 m, independent of elevation.
+    Positive lift tilts up. Positive drift turns clockwise.
+    Drift is azimuth change per 100 m, independent of elevation.
     """
     v = _unit_vec_from_az_dip(az, dip)
 
-    # small rotation magnitudes for this step
-    dtheta = np.deg2rad(lift_per100) * (d / 100.0)          # + lift -> up
-    dpsi   = np.deg2rad(drift_per100) * (d / 100.0)         # + drift -> clockwise az
+    dtheta = np.deg2rad(lift_per100) * (d / 100.0)   # + lift -> up
+    dpsi   = np.deg2rad(drift_per100) * (d / 100.0)  # + drift -> clockwise az
 
     z_hat = np.array([0.0, 0.0, 1.0])
 
-    # lift axis is perpendicular to the plane spanned by v and +Z
     axis_lift = np.cross(v, z_hat)
     n_axis = np.linalg.norm(axis_lift)
     if n_axis < 1e-12:
-        # nearly vertical, pick any horizontal axis to continue the great-circle
         axis_lift = np.array([1.0, 0.0, 0.0])
     else:
         axis_lift /= n_axis
 
-    # compose angular velocity vector: lift about axis_lift, drift clockwise about -Z
     omega = dtheta * axis_lift - dpsi * z_hat
     w = np.linalg.norm(omega)
 
@@ -160,15 +142,11 @@ def step_orientation(az, dip, d, lift_per100, drift_per100):
         v_new = v
 
     az_new, dip_new = _vector_to_az_dip(v_new)
-    # near-vertical guard to avoid az jumps
     if np.hypot(v_new[0], v_new[1]) < 1e-8:
         az_new = az
     return az_new, dip_new
 
 def min_curvature_path(stations):
-    """
-    Vector-based minimum curvature robust to pole wraps.
-    """
     if not stations:
         return np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0])
 
@@ -184,7 +162,6 @@ def min_curvature_path(stations):
 
         v1 = vecs[i - 1]
         v2 = vecs[i]
-
         cos_dog = float(np.clip(np.dot(v1, v2), -1.0, 1.0))
         dog = np.arccos(cos_dog)
         RF = 1.0 if dog < 1e-12 else (2.0 / dog) * np.tan(dog / 2.0)
@@ -249,7 +226,7 @@ def trim_to_md(stations, target_md):
 def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
     """
     Horizontal bearing change from v1 to v2.
-    Positive return value means clockwise rotation.
+    Positive return value means clockwise.
     Near-vertical guard avoids noise when horizontal projection is tiny.
     """
     E1, N1 = v1[0], v1[1]
@@ -258,30 +235,27 @@ def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
     h2 = E2*E2 + N2*N2
     if h1 < 1e-10 or h2 < 1e-10:
         return 0.0
-    cross_h = E1 * N2 - N1 * E2    # positive for CCW in EN plane
-    dot_h = E1 * E2 + N1 * N2
-    return float(-np.arctan2(cross_h, dot_h))  # sign flip so positive = clockwise
+    cross_h = E1 * N2 - N1 * E2   # positive for CCW in EN plane
+    dot_h   = E1 * E2 + N1 * N2
+    return float(-np.arctan2(cross_h, dot_h))  # positive = clockwise
 
 def _polesafe_elevation_deg(v: np.ndarray) -> float:
     return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
 
 def derive_lift_drift_last3(stations):
     """
-    Pole-safe estimate from the last 3 surveys.
-    Returns (lift_deg_per_100m, drift_deg_per_100m) with positive drift = clockwise.
+    Returns (lift_deg_per_100m, drift_deg_per_100m), positive drift = clockwise.
     """
     if len(stations) < 3:
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
     MD = np.array([float(s["MD"]) for s in sta], dtype=float)
-
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
     elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], dtype=float)
 
-    # Build unwrapped heading using pole-safe deltas
     heading = [0.0]
     for i in range(1, len(vecs)):
-        dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])  # positive = clockwise
+        dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])
         heading.append(heading[-1] + np.rad2deg(dpsi))
     heading = np.array(heading, dtype=float)
 
@@ -322,7 +296,6 @@ def find_plane_intersection(points_xyz, P0, n_hat):
     return None
 
 def parse_csv_flexible(file):
-    # accepts variants: MD, Measured Depth, Azimuth/Azi/AZ, Angle/Dip/Inclination
     df = pd.read_csv(file)
     cols = {c.lower().strip(): c for c in df.columns}
     def pick(*names):
@@ -371,9 +344,9 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
 
 def local_rates_per100(stations):
     """
-    Pole-safe per-100 m lift and drift.
-    - Lift: change in elevation angle derived from Z component.
-    - Drift: change in horizontal bearing where positive = clockwise.
+    Per-100 m lift and drift.
+    - Lift from elevation change.
+    - Drift from bearing change (positive = clockwise).
     """
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
@@ -419,6 +392,17 @@ with st.expander("Save or load session"):
                     st.error(f"Could not parse session JSON: {e}")
     with save_col:
         st.caption("Download a JSON snapshot of everything on this page")
+        # New: allow saving from here too, after page has created a JSON below
+        if "latest_export_json" in st.session_state:
+            st.download_button(
+                "Download current session JSON",
+                data=st.session_state["latest_export_json"].encode("utf-8"),
+                file_name="ddh_session.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        else:
+            st.info("The save button will appear once the page has enough info to build a JSON.")
 
 # ----------------------------------------------------------------------
 # Main UI
@@ -437,7 +421,7 @@ with colC:
     plan_lift = st.number_input("Planned lift deg/100m", value=st.session_state.plan_lift, step=0.1, key="plan_lift")
     plan_drift = st.number_input("Planned drift deg/100m", value=st.session_state.plan_drift, step=0.1, key="plan_drift")
 
-# compute planned with vector-rotation stepping
+# compute planned
 planned_stations = make_planned_stations(
     st.session_state.plan_len,
     st.session_state.step_m,
@@ -511,7 +495,7 @@ with colR3:
     actual_len = st.number_input("Actual hole length", value=float(st.session_state.actual_len),
                                  step=10.0, min_value=0.0, key="actual_len")
 
-# build actual to requested length: extend or trim
+# build actual to requested length
 actual_stations = actual_stations_base.copy()
 if actual_stations:
     last_md = sorted(actual_stations, key=lambda d: d["MD"])[-1]["MD"]
@@ -563,7 +547,6 @@ range_y = ymax - ymin
 range_z = zmax - zmin
 max_span = max(range_x, range_y, range_z, 1.0)
 
-# symmetric equal ranges around centers
 cx, cy, cz = (xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5
 half = 0.5 * max_span
 pad = max(0.25 * max_span, 25.0)
@@ -572,7 +555,6 @@ xr = [cx - L, cx + L]
 yr = [cy - L, cy + L]
 zr = [cz - L, cz + L]
 
-# plane mesh sized to the same cube
 span = 2.0 * L
 uu, vv = np.meshgrid(np.linspace(-span, span, 30), np.linspace(-span, span, 30))
 plane_grid = P0.reshape(1,1,3) + uu[...,None]*s_hat.reshape(1,1,3) + vv[...,None]*d_hat.reshape(1,1,3)
@@ -625,7 +607,7 @@ fig3d.update_layout(
 )
 st.plotly_chart(fig3d, use_container_width=True)
 
-# Orientation plot: Azimuth and Dip vs measured depth (actual hole)
+# Orientation plot
 st.markdown("### Azimuth and dip vs measured depth (actual hole)")
 fig_orient = go.Figure()
 az_center = 0.0
@@ -667,17 +649,31 @@ fig_orient.update_layout(
 )
 st.plotly_chart(fig_orient, use_container_width=True)
 
-# Per 100 m deviation plot
+# Per 100 m deviation plot - tighter ranges around collar plan values
 st.markdown("### Per 100 m deviation along actual hole")
 MDm, lift_series, drift_series = local_rates_per100(actual_stations) if actual_stations else (np.array([]), np.array([]), np.array([]))
 fig_rate = go.Figure()
 if len(MDm) > 0:
-    fig_rate.add_trace(go.Scatter(x=MDm, y=lift_series, mode="lines+markers", name="Lift deg/100m"))
-    fig_rate.add_trace(go.Scatter(x=MDm, y=drift_series, mode="lines+markers", name="Drift deg/100m"))  # positive = clockwise
+    fig_rate.add_trace(go.Scatter(x=MDm, y=lift_series, mode="lines+markers", name="Lift deg/100m", yaxis="y1"))
+    fig_rate.add_trace(go.Scatter(x=MDm, y=drift_series, mode="lines+markers", name="Drift deg/100m", yaxis="y2"))
+
+lift_center = float(st.session_state.plan_lift)
+drift_center = float(st.session_state.plan_drift)
+
 fig_rate.update_layout(
     xaxis_title="Measured depth along actual hole m",
-    yaxis_title="deg per 100 m",
-    margin=dict(l=0, r=0, b=0, t=10)
+    yaxis=dict(
+        title="Lift deg/100 m",
+        range=[lift_center - 15.0, lift_center + 15.0]
+    ),
+    yaxis2=dict(
+        title="Drift deg/100 m",
+        overlaying="y",
+        side="right",
+        range=[drift_center - 15.0, drift_center + 15.0]
+    ),
+    margin=dict(l=0, r=0, b=0, t=10),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
 st.plotly_chart(fig_rate, use_container_width=True)
 
@@ -703,8 +699,17 @@ cfg_dict = {
     }
 }
 cfg_json = export_config(cfg_dict)
+
+# keep a copy so the top expander can offer a save button even after import
+st.session_state["latest_export_json"] = cfg_json
+
 with st.expander("Export session", expanded=False):
-    st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
-                       file_name="ddh_session.json", mime="application/json", use_container_width=True)
+    st.download_button(
+        "Download session JSON",
+        data=cfg_json.encode("utf-8"),
+        file_name="ddh_session.json",
+        mime="application/json",
+        use_container_width=True
+    )
 
 st.caption("Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are circles that loop through +/-90 smoothly.")
