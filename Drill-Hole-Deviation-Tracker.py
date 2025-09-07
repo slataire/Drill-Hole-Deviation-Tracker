@@ -91,21 +91,18 @@ def trim_to_md(stations, target_md):
     if target_md >= sta[-1]["MD"] - 1e-9:
         return sta
     if target_md <= sta[0]["MD"] + 1e-9:
-        # keep only a synthetic station at target_md using first station orientation
         s0 = sta[0]
         return [{"MD": float(target_md), "Azimuth": float(s0["Azimuth"]), "Angle": float(s0["Angle"])}]
-    # find bracket
     for j in range(1, len(sta)):
         md0, md1 = float(sta[j-1]["MD"]), float(sta[j]["MD"])
         if md0 <= target_md <= md1:
             t = (target_md - md0) / max(md1 - md0, 1e-12)
-            # unwrap azimuth for interpolation
             az0 = float(sta[j-1]["Azimuth"])
             az1 = float(sta[j]["Azimuth"])
             azu = np.unwrap(np.deg2rad([az0, az1]))
             az_interp = np.rad2deg(azu[0] + t*(azu[1] - azu[0]))
             dip_interp = float(sta[j-1]["Angle"]) + t*(float(sta[j]["Angle"]) - float(sta[j-1]["Angle"]))
-            trimmed = sta[:j]  # up to j-1 inclusive
+            trimmed = sta[:j]
             trimmed.append({"MD": float(target_md), "Azimuth": wrap_az(az_interp), "Angle": float(dip_interp)})
             return trimmed
     return sta
@@ -371,7 +368,7 @@ P0 = point_at_md(px, py, pz, pmd, target_md)  # plane passes through planned hol
 pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
 pierce_act = find_plane_intersection(act_pts, P0, n_hat)
 
-# ---------- 3D view with enlarged bounds and plane to edges ----------
+# ---------- 3D view with orthographic projection and equal scaling ----------
 st.markdown("### 3D view")
 
 # bounds
@@ -436,15 +433,20 @@ if pierce_plan is not None and pierce_act is not None:
     dist_on_plane = float(np.linalg.norm(v_plane))
     st.info(f"Pierce separation on plane: {dist_on_plane:.2f} m")
 
+# Orthographic projection and equal scaling
 fig3d.update_layout(
     scene=dict(
         xaxis_title="X East m", xaxis=dict(range=xr),
         yaxis_title="Y North m", yaxis=dict(range=yr),
         zaxis_title="Z m (up)", zaxis=dict(range=zr),
-        aspectmode="cube"
+        aspectmode="cube",
+        aspectratio=dict(x=1, y=1, z=1)
     ),
-    margin=dict(l=0, r=0, b=0, t=0),
-    scene_camera=dict(eye=dict(x=1.8, y=1.8, z=1.2))
+    scene_camera=dict(
+        eye=dict(x=1.8, y=1.8, z=1.2),
+        projection=dict(type="orthographic")
+    ),
+    margin=dict(l=0, r=0, b=0, t=0)
 )
 st.plotly_chart(fig3d, use_container_width=True)
 
@@ -484,4 +486,5 @@ with save_col:
     st.download_button("Download session JSON", data=cfg_json.encode("utf-8"),
                        file_name="ddh_session.json", mime="application/json", use_container_width=True)
 
-st.caption("Notes: angles are dip-from-horizontal. Negative values point down. Lift is change of dip per 100 m. Drift is change of azimuth per 100 m. You can adjust the actual hole length. Save or load a full session JSON above.")
+st.caption("Notes: angles are dip-from-horizontal. Negative values point down. Lift is change of dip per 100 m. Drift is change of azimuth per 100 m. Orthographic projection with equal scaling is applied.")
+
