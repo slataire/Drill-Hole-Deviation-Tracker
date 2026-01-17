@@ -7,6 +7,21 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Drill Hole vs Planned Hole Deviation Tracking", layout="wide")
 
 # ----------------------------------------------------------------------
+# Disclaimer (top of page)
+# ----------------------------------------------------------------------
+st.markdown(
+    """
+> **Disclaimer / Test Phase**
+>
+> This free app helps you quickly track the deviation of a drill hole compared to a planned hole.
+> You can export the data as a JSON file and reload it later or share it with other team members.
+>
+> This app is in a test phase and is only updated periodically. The author makes no guarantee of accuracy.
+> **You should confirm hole deviation using other commercial software or independent verification methods.**
+"""
+)
+
+# ----------------------------------------------------------------------
 # Apply saved session BEFORE any widgets are created
 # ----------------------------------------------------------------------
 def apply_cfg_to_session(cfg):
@@ -15,41 +30,63 @@ def apply_cfg_to_session(cfg):
     st.session_state.step_m     = cfg.get("planned", {}).get("step_m", st.session_state.get("step_m", 10.0))
     st.session_state.plan_az0   = cfg.get("planned", {}).get("plan_az0", st.session_state.get("plan_az0", 90.0))
     st.session_state.plan_dip0  = cfg.get("planned", {}).get("plan_dip0", st.session_state.get("plan_dip0", -60.0))
-    st.session_state.plan_lift  = cfg.get("planned", {}).get("plan_lift", st.session_state.get("plan_lift", -2.0))
-    st.session_state.plan_drift = cfg.get("planned", {}).get("plan_drift", st.session_state.get("plan_drift", -1.0))
+    st.session_state.plan_lift  = cfg.get("planned", {}).get("plan_lift", st.session_state.get("plan_lift", 2.0))
+    st.session_state.plan_drift = cfg.get("planned", {}).get("plan_drift", st.session_state.get("plan_drift", 1.0))
+
     # surveys
     if "surveys" in cfg and isinstance(cfg["surveys"], list):
         st.session_state["loaded_surveys_df"] = pd.DataFrame(cfg["surveys"])
+
     # actual
-    st.session_state["rem_lift"]         = cfg.get("rem_lift", st.session_state.get("rem_lift", -2.0))
-    st.session_state["rem_drift"]        = cfg.get("rem_drift", st.session_state.get("rem_drift", -1.0))
+    st.session_state["rem_lift"]         = cfg.get("rem_lift", st.session_state.get("rem_lift", 2.0))
+    st.session_state["rem_drift"]        = cfg.get("rem_drift", st.session_state.get("rem_drift", 1.0))
     st.session_state["use_planned_zero"] = cfg.get("use_planned_zero", st.session_state.get("use_planned_zero", False))
     st.session_state["actual_len"]       = cfg.get("actual_len", st.session_state.get("actual_len", st.session_state.get("plan_len", 500.0)))
-    # new - actual collar fields
+
+    # actual collar fields
     st.session_state["act_az0"]          = cfg.get("actual", {}).get("act_az0", st.session_state.get("act_az0", st.session_state.get("plan_az0", 90.0)))
     st.session_state["act_dip0"]         = cfg.get("actual", {}).get("act_dip0", st.session_state.get("act_dip0", st.session_state.get("plan_dip0", -60.0)))
+
+    # optional coordinates (stored as strings to preserve "optional/blank")
+    coords = cfg.get("coords", {})
+    st.session_state["collar_x_str"] = str(coords.get("collar_x", st.session_state.get("collar_x_str", "")) or "")
+    st.session_state["collar_y_str"] = str(coords.get("collar_y", st.session_state.get("collar_y_str", "")) or "")
+    st.session_state["collar_z_str"] = str(coords.get("collar_z", st.session_state.get("collar_z_str", "")) or "")
+    st.session_state["target_x_str"] = str(coords.get("target_x", st.session_state.get("target_x_str", "")) or "")
+    st.session_state["target_y_str"] = str(coords.get("target_y", st.session_state.get("target_y_str", "")) or "")
+    st.session_state["target_z_str"] = str(coords.get("target_z", st.session_state.get("target_z_str", "")) or "")
+
     # plane
-    st.session_state["plane_strike"]     = cfg.get("plane", {}).get("strike", st.session_state.get("plane_strike", 114.0))
-    st.session_state["plane_dip"]        = cfg.get("plane", {}).get("dip", st.session_state.get("plane_dip", -58.0))
-    st.session_state["target_md"]        = cfg.get("plane", {}).get("target_md", st.session_state.get("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0)))
+    st.session_state["plane_strike"] = cfg.get("plane", {}).get("strike", st.session_state.get("plane_strike", 114.0))
+    st.session_state["plane_dip"]    = cfg.get("plane", {}).get("dip", st.session_state.get("plane_dip", -58.0))
+    st.session_state["target_md"]    = cfg.get("plane", {}).get("target_md", st.session_state.get("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0)))
 
 # defaults so first render has keys
 st.session_state.setdefault("plan_len", 500.0)
 st.session_state.setdefault("step_m", 10.0)
 st.session_state.setdefault("plan_az0", 90.0)
 st.session_state.setdefault("plan_dip0", -60.0)
-st.session_state.setdefault("plan_lift", -2.0)
-st.session_state.setdefault("plan_drift", -1.0)
-st.session_state.setdefault("rem_lift", -2.0)
-st.session_state.setdefault("rem_drift", -1.0)
+# changed defaults per request
+st.session_state.setdefault("plan_lift", 2.0)
+st.session_state.setdefault("plan_drift", 1.0)
+
+st.session_state.setdefault("rem_lift", 2.0)
+st.session_state.setdefault("rem_drift", 1.0)
 st.session_state.setdefault("use_planned_zero", False)
 st.session_state.setdefault("actual_len", st.session_state.get("plan_len", 500.0))
-# new - defaults for actual collar fields
 st.session_state.setdefault("act_az0", st.session_state.get("plan_az0", 90.0))
 st.session_state.setdefault("act_dip0", st.session_state.get("plan_dip0", -60.0))
 st.session_state.setdefault("plane_strike", 114.0)
 st.session_state.setdefault("plane_dip", -58.0)
 st.session_state.setdefault("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0))
+
+# optional coordinate strings
+st.session_state.setdefault("collar_x_str", "")
+st.session_state.setdefault("collar_y_str", "")
+st.session_state.setdefault("collar_z_str", "")
+st.session_state.setdefault("target_x_str", "")
+st.session_state.setdefault("target_y_str", "")
+st.session_state.setdefault("target_z_str", "")
 
 # apply pending config before widgets are created
 if "pending_config" in st.session_state:
@@ -407,6 +444,15 @@ def local_rates_per100(stations):
 def export_config(config_dict):
     return json.dumps(config_dict, indent=2)
 
+def _parse_optional_float(s: str):
+    s = (s or "").strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
 # Common legend style with title watermark
 LEGEND_TITLE = (
     "Drill-Hole-Deviation-Tracker<br>"
@@ -422,7 +468,7 @@ legend_style = dict(
 # ----------------------------------------------------------------------
 # Import/Export UI
 # ----------------------------------------------------------------------
-with st.expander("Save or load session"):
+with st.expander("Export or load session"):
     load_col, save_col = st.columns(2)
     with load_col:
         cfg_file = st.file_uploader("Load a saved session JSON", type=["json"], key="cfg_up")
@@ -447,14 +493,62 @@ with st.expander("Save or load session"):
                 use_container_width=True
             )
         else:
-            st.info("The save button will appear once the page has enough info to build a JSON.")
+            st.info("The export button will appear once the page has enough info to build a JSON.")
 
 # ----------------------------------------------------------------------
 # Main UI
 # ----------------------------------------------------------------------
 st.title("Drill Hole vs Planned Hole Deviation Tracking")
 
-# planned inputs
+# Optional collar/target coordinates (XYZ)
+st.markdown("### Collar and target coordinates (optional)")
+st.caption(
+    "Optional: enter collar and target coordinates in X, Y, Z. "
+    "If BOTH collar and target coordinates are provided, the Target Plane section is disabled."
+)
+cxyz1, cxyz2 = st.columns(2)
+with cxyz1:
+    st.markdown("**Collar coordinates (optional)**")
+    st.text_input("Collar X", value=st.session_state.collar_x_str, key="collar_x_str", placeholder="(optional)")
+    st.text_input("Collar Y", value=st.session_state.collar_y_str, key="collar_y_str", placeholder="(optional)")
+    st.text_input("Collar Z", value=st.session_state.collar_z_str, key="collar_z_str", placeholder="(optional)")
+with cxyz2:
+    st.markdown("**Target coordinates (optional)**")
+    st.text_input("Target X", value=st.session_state.target_x_str, key="target_x_str", placeholder="(optional)")
+    st.text_input("Target Y", value=st.session_state.target_y_str, key="target_y_str", placeholder="(optional)")
+    st.text_input("Target Z", value=st.session_state.target_z_str, key="target_z_str", placeholder="(optional)")
+
+collar_xyz = np.array(
+    [
+        _parse_optional_float(st.session_state.collar_x_str),
+        _parse_optional_float(st.session_state.collar_y_str),
+        _parse_optional_float(st.session_state.collar_z_str),
+    ],
+    dtype=object
+)
+target_xyz = np.array(
+    [
+        _parse_optional_float(st.session_state.target_x_str),
+        _parse_optional_float(st.session_state.target_y_str),
+        _parse_optional_float(st.session_state.target_z_str),
+    ],
+    dtype=object
+)
+collar_xyz_ok = all(v is not None for v in collar_xyz.tolist())
+target_xyz_ok = all(v is not None for v in target_xyz.tolist())
+
+collar_shift = np.array([0.0, 0.0, 0.0], dtype=float)
+if collar_xyz_ok:
+    collar_shift = np.array([float(collar_xyz[0]), float(collar_xyz[1]), float(collar_xyz[2])], dtype=float)
+
+target_point = None
+if target_xyz_ok:
+    target_point = np.array([float(target_xyz[0]), float(target_xyz[1]), float(target_xyz[2])], dtype=float)
+
+# Planned hole inputs
+st.markdown("### Planned hole inputs")
+st.caption("Enter planned hole information here")
+
 colA, colB, colC = st.columns(3)
 with colA:
     plan_len = st.number_input("Planned hole length", value=st.session_state.plan_len, step=10.0, min_value=1.0, key="plan_len")
@@ -463,8 +557,18 @@ with colB:
     plan_az0 = st.number_input("Planned hole collar azimuth", value=st.session_state.plan_az0, step=1.0, key="plan_az0")
     plan_dip0 = st.number_input("Planned hole collar dip", value=st.session_state.plan_dip0, step=1.0, key="plan_dip0")
 with colC:
-    plan_lift = st.number_input("Planned lift deg/100m", value=st.session_state.plan_lift, step=0.1, key="plan_lift")
-    plan_drift = st.number_input("Planned drift deg/100m", value=st.session_state.plan_drift, step=0.1, key="plan_drift")
+    plan_lift = st.number_input(
+        "Planned lift deg/100m (positive curves up)",
+        value=st.session_state.plan_lift,
+        step=0.1,
+        key="plan_lift"
+    )
+    plan_drift = st.number_input(
+        "Planned drift deg/100m (positive curves to the right)",
+        value=st.session_state.plan_drift,
+        step=0.1,
+        key="plan_drift"
+    )
 
 # compute planned with vector-rotation stepping
 planned_stations = make_planned_stations(
@@ -476,16 +580,45 @@ planned_stations = make_planned_stations(
     st.session_state.plan_drift,
 )
 px, py, pz, pmd = min_curvature_path(planned_stations)
-plan_pts = np.column_stack([px, py, pz])
+plan_pts = np.column_stack([px, py, pz]) + collar_shift.reshape(1, 3)
 
-# down hole surveys
-st.subheader("Down hole surveys")
+# Measured Collar Orientation (moved ABOVE surveys)
+st.markdown("### Measured Collar Orientation")
+st.caption(
+    "Enter the collar azimuth and dip as measured by the collar tool "
+    "(e.g., gyro-based tool, GPS-based tool, compass, etc.). "
+    "If you do not have this data, select “Use planned collar Az and Dip” to use the planned orientation instead."
+)
+colAc1, colAc2 = st.columns(2)
+with colAc1:
+    act_az0 = st.number_input("Measured collar azimuth", value=st.session_state.act_az0, step=1.0, key="act_az0")
+with colAc2:
+    act_dip0 = st.number_input("Measured collar dip", value=st.session_state.act_dip0, step=1.0, key="act_dip0")
+
+use_planned_zero = st.checkbox("Use planned collar Az and Dip", value=st.session_state.use_planned_zero, key="use_planned_zero")
+
+# Downhole surveys
+st.subheader("Downhole surveys")
+st.caption(
+    "Survey data formats accepted:\n"
+    "- **CSV** or **Excel** upload with columns for **MD**, **Azimuth**, and **Dip** (flexible headers accepted: "
+    "MD / Measured Depth, Azimuth / Azi / AZ, Dip / Angle / Inclination).\n"
+    "- Or **manual entry** in the table below.\n"
+    "You can also deactivate (disable) bad survey rows using the **Active** column."
+)
+
 method = st.radio("Provide surveys via", ["CSV or Excel upload", "Manual entry"], horizontal=True)
 
-df_in = pd.DataFrame(columns=["MD","Azimuth","Angle"])
+df_in = pd.DataFrame(columns=["MD", "Azimuth", "Angle", "Active"])
+
 if method == "CSV or Excel upload":
-    file = st.file_uploader("Upload CSV or Excel with columns MD, Azimuth, Angle. Flexible headers accepted.", type=["csv","xlsx","xls"], key="tabular_up")
-    flip_sign = st.checkbox("Uploaded angle is positive-down - flip sign to negative-down", value=False, key="flip_sign")
+    file = st.file_uploader(
+        "Upload CSV or Excel with columns MD, Azimuth, Dip (Negative is Down). Flexible headers accepted.",
+        type=["csv", "xlsx", "xls"],
+        key="tabular_up"
+    )
+    flip_sign = st.checkbox("Uploaded dip is positive-down - flip sign to negative-down", value=False, key="flip_sign")
+
     if "loaded_surveys_df" in st.session_state:
         df_in = st.session_state["loaded_surveys_df"].copy()
 
@@ -495,49 +628,69 @@ if method == "CSV or Excel upload":
         try:
             if ext in ["xlsx", "xls"]:
                 xls = pd.ExcelFile(file)
+                st.caption("If this is an Excel workbook, select the sheet containing the survey data here. It will default to the first sheet.")
                 sheet = st.selectbox("Select sheet", xls.sheet_names, index=0, key="sheet_pick")
                 raw_df = pd.read_excel(xls, sheet_name=sheet)
             else:
                 raw_df = pd.read_csv(file)
-            df_in = _parse_table_flexible_df(raw_df)
+
+            df_parsed = _parse_table_flexible_df(raw_df)
             if flip_sign:
-                df_in["Angle"] = -df_in["Angle"]
-            if not flip_sign and len(df_in) > 0 and df_in["Angle"].median() > 0:
-                df_in["Angle"] = -df_in["Angle"]
+                df_parsed["Angle"] = -df_parsed["Angle"]
+            if not flip_sign and len(df_parsed) > 0 and df_parsed["Angle"].median() > 0:
+                df_parsed["Angle"] = -df_parsed["Angle"]
                 st.info("Detected positive-down dips in file. Converted to negative-down.")
+
+            df_in = df_parsed.copy()
         except Exception as e:
             st.error(f"Could not read file: {e}")
-    st.caption(f"Loaded {len(df_in)} survey rows")
-    st.dataframe(df_in, use_container_width=True, height=350)
+
+    if "Active" not in df_in.columns:
+        df_in["Active"] = True
+
+    st.caption(f"Loaded {len(df_in)} survey rows (toggle **Active** to disable bad rows)")
+    df_view = df_in.copy()
+    df_view = df_view.rename(columns={"Angle": "Dip (Negative is Down)"})
+    edited = st.data_editor(
+        df_view,
+        use_container_width=True,
+        height=350,
+        num_rows="dynamic",
+        key="survey_editor_upload",
+    )
+    # map back to internal schema
+    df_in = edited.rename(columns={"Dip (Negative is Down)": "Angle"}).copy()
+
 else:
-    df_in = st.data_editor(
-        pd.DataFrame(
-            [
-                {"MD": 0.0, "Azimuth": st.session_state.plan_az0, "Angle": st.session_state.plan_dip0},
-                {"MD": 50.0, "Azimuth": st.session_state.plan_az0, "Angle": st.session_state.plan_dip0},
-            ]
-        ),
+    st.caption("You can manually enter the survey data in the table below (toggle **Active** to disable bad rows).")
+    manual_df = pd.DataFrame(
+        [
+            {"MD": 0.0, "Azimuth": st.session_state.plan_az0, "Dip (Negative is Down)": st.session_state.plan_dip0, "Active": True},
+            {"MD": 50.0, "Azimuth": st.session_state.plan_az0, "Dip (Negative is Down)": st.session_state.plan_dip0, "Active": True},
+        ]
+    )
+    edited = st.data_editor(
+        manual_df,
         num_rows="dynamic",
         use_container_width=True,
         key="manual_df"
     )
+    df_in = edited.rename(columns={"Dip (Negative is Down)": "Angle"}).copy()
+    if "Active" not in df_in.columns:
+        df_in["Active"] = True
 
-# actual collar inputs - new
-st.markdown("#### Actual collar orientation")
-colAc1, colAc2 = st.columns(2)
-with colAc1:
-    act_az0 = st.number_input("Actual hole collar azimuth", value=st.session_state.act_az0, step=1.0, key="act_az0")
-with colAc2:
-    act_dip0 = st.number_input("Actual hole collar dip", value=st.session_state.act_dip0, step=1.0, key="act_dip0")
+# Build actual station list (filter Active rows)
+df_for_actual = pd.DataFrame(df_in)
+if "Active" in df_for_actual.columns:
+    df_for_actual["Active"] = df_for_actual["Active"].astype(bool)
+    df_for_actual = df_for_actual[df_for_actual["Active"] == True]
 
 actual_stations_base = [
     {"MD": float(r["MD"]), "Azimuth": wrap_az(float(r["Azimuth"])), "Angle": clamp(float(r["Angle"]), -90.0, 90.0)}
-    for _, r in pd.DataFrame(df_in).dropna(subset=["MD","Azimuth","Angle"]).iterrows()
+    for _, r in df_for_actual.dropna(subset=["MD", "Azimuth", "Angle"]).iterrows()
 ]
 
-# Use Collar Az and Dip for 0
-use_planned_zero = st.checkbox("Use Collar Az and Dip for 0", value=st.session_state.use_planned_zero, key="use_planned_zero")
-# If checked -> use planned collar. If unchecked -> use actual collar.
+# Insert 0 station based on either planned collar or measured collar
 actual_stations_base = ensure_zero_station(
     actual_stations_base,
     use_planned=use_planned_zero,
@@ -551,6 +704,10 @@ actual_stations_base = ensure_zero_station(
 sug_lift, sug_drift = derive_lift_drift_last3(actual_stations_base) if len(actual_stations_base) >= 3 else (None, None)
 
 st.markdown("#### Remaining average lift and drift after last survey")
+st.caption(
+    "Enter the expected remaining average lift and drift projected to end-of-hole. "
+    "By default these are set to the suggested values from the last surveys (when available)."
+)
 colS1, colS2 = st.columns(2)
 with colS1:
     st.caption(f"Suggested lift from last 3: {sug_lift:.2f} deg/100m" if sug_lift is not None else "Suggested lift needs at least 3 surveys")
@@ -559,12 +716,27 @@ with colS2:
 
 colR1, colR2, colR3 = st.columns(3)
 with colR1:
-    rem_lift = st.number_input("Remaining avg lift deg/100m", value=(sug_lift if sug_lift is not None else st.session_state.rem_lift), step=0.1, key="rem_lift")
+    rem_lift = st.number_input(
+        "Remaining avg lift deg/100m",
+        value=(sug_lift if sug_lift is not None else st.session_state.rem_lift),
+        step=0.1,
+        key="rem_lift"
+    )
 with colR2:
-    rem_drift = st.number_input("Remaining avg drift deg/100m", value=(sug_drift if sug_drift is not None else st.session_state.rem_drift), step=0.1, key="rem_drift")
+    rem_drift = st.number_input(
+        "Remaining avg drift deg/100m",
+        value=(sug_drift if sug_drift is not None else st.session_state.rem_drift),
+        step=0.1,
+        key="rem_drift"
+    )
 with colR3:
-    actual_len = st.number_input("Actual hole length", value=float(st.session_state.actual_len),
-                                 step=10.0, min_value=0.0, key="actual_len")
+    actual_len = st.number_input(
+        "Actual hole length",
+        value=float(st.session_state.actual_len),
+        step=10.0,
+        min_value=0.0,
+        key="actual_len"
+    )
 
 # build actual to requested length: extend or trim
 actual_stations = actual_stations_base.copy()
@@ -581,34 +753,74 @@ if actual_stations:
         actual_stations = trim_to_md(actual_stations, target_len)
 
 ax, ay, az, amd = min_curvature_path(actual_stations) if actual_stations else (np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0]))
-act_pts = np.column_stack([ax, ay, az])
+act_pts = (np.column_stack([ax, ay, az]) + collar_shift.reshape(1, 3)) if actual_stations else (np.column_stack([ax, ay, az]))
 
-# Target plane and pierce points
-st.subheader("Target plane and pierce points")
-colP1, colP2, colP3 = st.columns(3)
-with colP1:
-    plane_strike = st.number_input("Plane strike deg", value=st.session_state.plane_strike, step=1.0, key="plane_strike")
-with colP2:
-    plane_dip = st.number_input("Plane dip-from-horizontal deg (negative down)", value=st.session_state.plane_dip, step=1.0, key="plane_dip")
-with colP3:
-    default_md = float(st.session_state.target_md)
-    target_md = st.number_input("Down hole target depth on planned hole", value=default_md, step=5.0,
-                                min_value=0.0, max_value=float(st.session_state.plan_len), key="target_md")
+# ----------------------------------------------------------------------
+# Target plane and pierce points (disabled when collar+target coords provided)
+# ----------------------------------------------------------------------
+plane_enabled = not (collar_xyz_ok and target_xyz_ok)
 
-s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
-P0 = point_at_md(px, py, pz, pmd, target_md)
+pierce_plan = None
+pierce_act = None
+P0 = None
+s_hat = d_hat = n_hat = None
+plane_grid = None
 
-# pierce points
-pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
-pierce_act = find_plane_intersection(act_pts, P0, n_hat)
+if plane_enabled:
+    st.subheader("Target plane and pierce points")
+    st.caption(
+        "This app assumes the target lies on a plane. Set the plane azimuth (right-hand rule) and dip (negative is down) "
+        "to visualize pierce points and calculate the distance between the target and the actual hole along the target plane."
+    )
 
+    colP1, colP2, colP3 = st.columns(3)
+    with colP1:
+        plane_strike = st.number_input("Plane strike deg", value=st.session_state.plane_strike, step=1.0, key="plane_strike")
+    with colP2:
+        plane_dip = st.number_input("Plane dip-from-horizontal deg (negative down)", value=st.session_state.plane_dip, step=1.0, key="plane_dip")
+    with colP3:
+        default_md = float(st.session_state.target_md)
+        target_md = st.number_input(
+            "Downhole target depth on planned hole",
+            value=default_md,
+            step=5.0,
+            min_value=0.0,
+            max_value=float(st.session_state.plan_len),
+            key="target_md"
+        )
+
+    s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
+
+    # P0 is a point on the planned hole at target_md, shifted by collar coords if provided
+    P0_local = point_at_md(px, py, pz, pmd, target_md)
+    P0 = P0_local + collar_shift
+
+    # pierce points
+    pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
+    pierce_act = find_plane_intersection(act_pts, P0, n_hat)
+
+# ----------------------------------------------------------------------
 # 3D view with equal axes
+# ----------------------------------------------------------------------
 st.markdown("### 3D view")
-all_chunks = [plan_pts, act_pts, P0.reshape(1,3)]
-if pierce_plan is not None:
-    all_chunks.append(pierce_plan.reshape(1,3))
-if pierce_act is not None:
-    all_chunks.append(pierce_act.reshape(1,3))
+
+all_chunks = [plan_pts, act_pts]
+# collar point (origin shifted if coordinates provided)
+collar_point = collar_shift.reshape(1, 3)
+all_chunks.append(collar_point)
+
+# optional target point
+if target_point is not None:
+    all_chunks.append(target_point.reshape(1, 3))
+
+# plane-related points if enabled
+if plane_enabled and P0 is not None:
+    all_chunks.append(P0.reshape(1, 3))
+if plane_enabled and pierce_plan is not None:
+    all_chunks.append(pierce_plan.reshape(1, 3))
+if plane_enabled and pierce_act is not None:
+    all_chunks.append(pierce_act.reshape(1, 3))
+
 ALL = np.vstack(all_chunks)
 
 xmin, ymin, zmin = np.min(ALL, axis=0)
@@ -627,32 +839,45 @@ xr = [cx - L, cx + L]
 yr = [cy - L, cy + L]
 zr = [cz - L, cz + L]
 
-# plane mesh sized to the same cube
-span = 2.0 * L
-uu, vv = np.meshgrid(np.linspace(-span, span, 30), np.linspace(-span, span, 30))
-plane_grid = P0.reshape(1,1,3) + uu[...,None]*s_hat.reshape(1,1,3) + vv[...,None]*d_hat.reshape(1,1,3)
+# plane mesh sized to the same cube (only if enabled)
+if plane_enabled and P0 is not None and s_hat is not None and d_hat is not None:
+    span = 2.0 * L
+    uu, vv = np.meshgrid(np.linspace(-span, span, 30), np.linspace(-span, span, 30))
+    plane_grid = P0.reshape(1, 1, 3) + uu[..., None]*s_hat.reshape(1, 1, 3) + vv[..., None]*d_hat.reshape(1, 1, 3)
 
 fig3d = go.Figure()
-fig3d.add_trace(go.Scatter3d(x=px, y=py, z=pz, mode="lines", name="Planned", line=dict(width=6)))
-fig3d.add_trace(go.Scatter3d(x=ax, y=ay, z=az, mode="lines", name="Actual", line=dict(width=6)))
-fig3d.add_trace(go.Scatter3d(x=[0], y=[0], z=[0], mode="markers", name="Collar", marker=dict(size=5)))
-fig3d.add_trace(go.Surface(
-    x=plane_grid[...,0],
-    y=plane_grid[...,1],
-    z=plane_grid[...,2],
-    opacity=0.35, showscale=False, name="Target plane"
+fig3d.add_trace(go.Scatter3d(x=plan_pts[:, 0], y=plan_pts[:, 1], z=plan_pts[:, 2], mode="lines", name="Planned", line=dict(width=6)))
+fig3d.add_trace(go.Scatter3d(x=act_pts[:, 0], y=act_pts[:, 1], z=act_pts[:, 2], mode="lines", name="Actual", line=dict(width=6)))
+
+fig3d.add_trace(go.Scatter3d(
+    x=[collar_shift[0]], y=[collar_shift[1]], z=[collar_shift[2]],
+    mode="markers", name="Collar", marker=dict(size=5)
 ))
-if pierce_plan is not None:
+
+if target_point is not None:
+    fig3d.add_trace(go.Scatter3d(
+        x=[target_point[0]], y=[target_point[1]], z=[target_point[2]],
+        mode="markers", name="Target (XYZ)", marker=dict(size=6, symbol="diamond")
+    ))
+
+if plane_enabled and plane_grid is not None:
+    fig3d.add_trace(go.Surface(
+        x=plane_grid[..., 0],
+        y=plane_grid[..., 1],
+        z=plane_grid[..., 2],
+        opacity=0.35, showscale=False, name="Target plane"
+    ))
+if plane_enabled and pierce_plan is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[pierce_plan[0]], y=[pierce_plan[1]], z=[pierce_plan[2]],
         mode="markers", name="Pierce planned", marker=dict(size=6, symbol="x")
     ))
-if pierce_act is not None:
+if plane_enabled and pierce_act is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[pierce_act[0]], y=[pierce_act[1]], z=[pierce_act[2]],
         mode="markers", name="Pierce actual", marker=dict(size=6)
     ))
-if pierce_plan is not None and pierce_act is not None:
+if plane_enabled and pierce_plan is not None and pierce_act is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[pierce_plan[0], pierce_act[0]],
         y=[pierce_plan[1], pierce_act[1]],
@@ -663,6 +888,9 @@ if pierce_plan is not None and pierce_act is not None:
     v_plane = v - np.dot(v, n_hat)*n_hat
     dist_on_plane = float(np.linalg.norm(v_plane))
     st.info(f"Pierce separation on plane: {dist_on_plane:.2f} m")
+
+if not plane_enabled:
+    st.info("Target Plane section is disabled because both collar and target coordinates were provided.")
 
 fig3d.update_layout(
     scene=dict(
@@ -681,7 +909,7 @@ fig3d.update_layout(
 )
 st.plotly_chart(fig3d, use_container_width=True)
 
-# Orientation plot: Azimuth and dip vs measured depth (actual hole) - ranges expand to fit data
+# Orientation plot: Azimuth and dip vs measured depth (actual hole)
 st.markdown("### Azimuth and dip vs measured depth (actual hole)")
 fig_orient = go.Figure()
 if actual_stations:
@@ -696,9 +924,9 @@ if actual_stations:
 
     dip_min, dip_max = float(np.min(DIP)), float(np.max(DIP))
     az_min, az_max = float(np.min(AZu)), float(np.max(AZu))
-    pad = 2.0
-    dip_range = [max(-90.0, dip_min - pad), min(90.0, dip_max + pad)]
-    az_range = [az_min - pad, az_max + pad]
+    pad2 = 2.0
+    dip_range = [max(-90.0, dip_min - pad2), min(90.0, dip_max + pad2)]
+    az_range = [az_min - pad2, az_max + pad2]
 else:
     MD, DIP, AZu = [], [], []
     dip_range = [-90, 90]
@@ -746,7 +974,9 @@ fig_rate.update_layout(
 )
 st.plotly_chart(fig_rate, use_container_width=True)
 
-# Export session JSON
+# ----------------------------------------------------------------------
+# Export session JSON (includes imported/edited surveys, including Active flags)
+# ----------------------------------------------------------------------
 cfg_dict = {
     "planned": {
         "plan_len": float(st.session_state.plan_len),
@@ -756,6 +986,7 @@ cfg_dict = {
         "plan_lift": float(st.session_state.plan_lift),
         "plan_drift": float(st.session_state.plan_drift),
     },
+    # save surveys as currently displayed/edited (including Active)
     "surveys": pd.DataFrame(df_in).to_dict(orient="records"),
     "rem_lift": float(st.session_state.rem_lift),
     "rem_drift": float(st.session_state.rem_drift),
@@ -764,6 +995,14 @@ cfg_dict = {
     "actual": {
         "act_az0": float(st.session_state.act_az0),
         "act_dip0": float(st.session_state.act_dip0),
+    },
+    "coords": {
+        "collar_x": _parse_optional_float(st.session_state.collar_x_str),
+        "collar_y": _parse_optional_float(st.session_state.collar_y_str),
+        "collar_z": _parse_optional_float(st.session_state.collar_z_str),
+        "target_x": _parse_optional_float(st.session_state.target_x_str),
+        "target_y": _parse_optional_float(st.session_state.target_y_str),
+        "target_z": _parse_optional_float(st.session_state.target_z_str),
     },
     "plane": {
         "strike": float(st.session_state.plane_strike),
@@ -785,5 +1024,7 @@ with st.expander("Export session", expanded=False):
         use_container_width=True
     )
 
-st.caption("Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are circles.")
-
+st.caption(
+    "Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. "
+    "Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are circles."
+)
