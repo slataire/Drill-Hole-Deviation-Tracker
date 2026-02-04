@@ -368,8 +368,8 @@ def _parse_table_flexible_df(df_in: pd.DataFrame) -> pd.DataFrame:
                 return cols[n]
         return None
     c_md = pick("md", "measured depth", "measured_depth")
-    c_az = pick("azimuth", "azi", "az")
-    c_an = pick("angle", "dip", "inclination", "incl")
+    c_az = pick("azimuth", "azi", "az", "True North Azimuth")
+    c_an = pick("angle", "dip", "inclination", "incl", "Dip")
     if not all([c_md, c_az, c_an]):
         return pd.DataFrame(columns=["MD","Azimuth","Angle"])
     out = df[[c_md, c_az, c_an]].copy()
@@ -1028,3 +1028,4 @@ st.caption(
     "Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. "
     "Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are circles."
 )
+
