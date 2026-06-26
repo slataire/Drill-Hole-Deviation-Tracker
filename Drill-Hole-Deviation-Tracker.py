@@ -3,9 +3,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
- 
+
 st.set_page_config(page_title="Drill Hole vs Planned Hole Deviation Tracking", layout="wide")
- 
+
 # ----------------------------------------------------------------------
 # Disclaimer (top of page)
 # ----------------------------------------------------------------------
@@ -20,7 +20,7 @@ st.markdown(
 > **You should confirm hole deviation using other commercial software or independent verification methods.**
 """
 )
- 
+
 # ----------------------------------------------------------------------
 # Apply saved session BEFORE any widgets are created
 # ----------------------------------------------------------------------
@@ -32,27 +32,27 @@ def apply_cfg_to_session(cfg):
     st.session_state.plan_dip0  = cfg.get("planned", {}).get("plan_dip0", st.session_state.get("plan_dip0", -60.0))
     st.session_state.plan_lift  = cfg.get("planned", {}).get("plan_lift", st.session_state.get("plan_lift", 2.0))
     st.session_state.plan_drift = cfg.get("planned", {}).get("plan_drift", st.session_state.get("plan_drift", 1.0))
- 
+
     # surveys
     if "surveys" in cfg and isinstance(cfg["surveys"], list):
         st.session_state["loaded_surveys_df"] = pd.DataFrame(cfg["surveys"])
         # Force the survey-entry method to the upload table so loaded surveys are shown
         # regardless of which radio option was previously active.
         st.session_state["survey_method"] = "CSV or Excel upload"
- 
+
     # flip_sign checkbox state (round-trips with the surveys)
     st.session_state["flip_sign"] = bool(cfg.get("flip_sign", st.session_state.get("flip_sign", False)))
- 
+
     # actual
     st.session_state["rem_lift"]         = cfg.get("rem_lift", st.session_state.get("rem_lift", 2.0))
     st.session_state["rem_drift"]        = cfg.get("rem_drift", st.session_state.get("rem_drift", 1.0))
     st.session_state["use_planned_zero"] = cfg.get("use_planned_zero", st.session_state.get("use_planned_zero", False))
     st.session_state["actual_len"]       = cfg.get("actual_len", st.session_state.get("actual_len", st.session_state.get("plan_len", 500.0)))
- 
+
     # actual collar fields
     st.session_state["act_az0"]          = cfg.get("actual", {}).get("act_az0", st.session_state.get("act_az0", st.session_state.get("plan_az0", 90.0)))
     st.session_state["act_dip0"]         = cfg.get("actual", {}).get("act_dip0", st.session_state.get("act_dip0", st.session_state.get("plan_dip0", -60.0)))
- 
+
     # optional coordinates (stored as strings to preserve "optional/blank")
     coords = cfg.get("coords", {})
     st.session_state["collar_x_str"] = str(coords.get("collar_x", st.session_state.get("collar_x_str", "")) or "")
@@ -61,7 +61,7 @@ def apply_cfg_to_session(cfg):
     st.session_state["target_x_str"] = str(coords.get("target_x", st.session_state.get("target_x_str", "")) or "")
     st.session_state["target_y_str"] = str(coords.get("target_y", st.session_state.get("target_y_str", "")) or "")
     st.session_state["target_z_str"] = str(coords.get("target_z", st.session_state.get("target_z_str", "")) or "")
- 
+
     # plane
     st.session_state["plane_strike"] = cfg.get("plane", {}).get("strike", st.session_state.get("plane_strike", 114.0))
     st.session_state["plane_dip"]    = cfg.get("plane", {}).get("dip", st.session_state.get("plane_dip", -58.0))
@@ -70,7 +70,7 @@ def apply_cfg_to_session(cfg):
     # Clamp target_md to the (possibly reduced) planned length so the number_input
     # max_value constraint cannot be violated on reload.
     st.session_state["target_md"] = float(min(max(0.0, float(_target_md)), _plan_len_now))
- 
+
 # defaults so first render has keys
 st.session_state.setdefault("plan_len", 500.0)
 st.session_state.setdefault("step_m", 10.0)
@@ -79,7 +79,7 @@ st.session_state.setdefault("plan_dip0", -60.0)
 # changed defaults per request
 st.session_state.setdefault("plan_lift", 2.0)
 st.session_state.setdefault("plan_drift", 1.0)
- 
+
 st.session_state.setdefault("rem_lift", 2.0)
 st.session_state.setdefault("rem_drift", 1.0)
 st.session_state.setdefault("use_planned_zero", False)
@@ -91,7 +91,7 @@ st.session_state.setdefault("plane_dip", -58.0)
 st.session_state.setdefault("target_md", max(0.0, st.session_state.get("plan_len", 500.0) - 50.0))
 st.session_state.setdefault("flip_sign", False)
 st.session_state.setdefault("survey_method", "CSV or Excel upload")
- 
+
 # optional coordinate strings
 st.session_state.setdefault("collar_x_str", "")
 st.session_state.setdefault("collar_y_str", "")
@@ -99,11 +99,11 @@ st.session_state.setdefault("collar_z_str", "")
 st.session_state.setdefault("target_x_str", "")
 st.session_state.setdefault("target_y_str", "")
 st.session_state.setdefault("target_z_str", "")
- 
+
 # apply pending config before widgets are created
 if "pending_config" in st.session_state:
     apply_cfg_to_session(st.session_state.pop("pending_config"))
- 
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
@@ -112,33 +112,33 @@ def wrap_az(az):
     if az < 0:
         az += 360.0
     return az
- 
+
 def clamp(v, vmin, vmax):
     return max(vmin, min(v, vmax))
- 
+
 def normalize_dip_az(dip, az):
     """
     Keep dip in [-90, 90] and adjust az by 180 when crossing a pole.
- 
+
     Convention:
     - Azimuth clockwise from north in horizontal plane.
     - Dip from horizontal, negative down.
     """
     az = float(az)
     dip = float(dip)
- 
+
     while dip > 90.0:
         dip = 180.0 - dip
         dip = -dip
         az += 180.0
- 
+
     while dip < -90.0:
         dip = -180.0 - dip
         dip = -dip
         az += 180.0
- 
+
     return wrap_az(az), clamp(dip, -90.0, 90.0)
- 
+
 def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
     """
     Convert azimuth and dip-from-horizontal (negative down) to a unit vector [E, N, Z].
@@ -151,7 +151,7 @@ def _unit_vec_from_az_dip(az_deg: float, dip_deg: float) -> np.ndarray:
     N = ch * np.cos(az)
     Z = np.sin(elev)
     return np.array([E, N, Z], dtype=float)
- 
+
 def _vector_to_az_dip(v: np.ndarray):
     """
     Inverse of _unit_vec_from_az_dip.
@@ -161,7 +161,7 @@ def _vector_to_az_dip(v: np.ndarray):
     az = wrap_az(np.rad2deg(np.arctan2(v[0], v[1])))
     dip = float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
     return az, dip
- 
+
 def _rodrigues_rotate(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
     """
     Rotate vector v around unit axis by angle_rad using Rodrigues formula.
@@ -171,81 +171,81 @@ def _rodrigues_rotate(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.n
     a = axis / max(np.linalg.norm(axis), 1e-12)
     c, s = np.cos(angle_rad), np.sin(angle_rad)
     return v * c + np.cross(a, v) * s + a * np.dot(a, v) * (1.0 - c)
- 
+
 def step_orientation(az, dip, d, lift_per100, drift_per100):
     """
     Vector stepping on the unit sphere.
- 
+
     Conventions:
     - Dip is from horizontal. Negative is down.
     - Positive lift increases dip (tilts direction upward).
     - Positive drift turns clockwise in the horizontal plane.
- 
+
     Implementation:
     - Lift: rotate toward +Z about axis = normalize(cross(v, +Z)).
     - Drift: rotate about -Z (clockwise).
     - Drift is interpreted as azimuth change per 100 m, independent of elevation.
     """
     v = _unit_vec_from_az_dip(az, dip)
- 
+
     dtheta = np.deg2rad(lift_per100) * (d / 100.0)          # + lift -> up
     dpsi   = np.deg2rad(drift_per100) * (d / 100.0)         # + drift -> clockwise az
- 
+
     z_hat = np.array([0.0, 0.0, 1.0])
- 
+
     axis_lift = np.cross(v, z_hat)
     n_axis = np.linalg.norm(axis_lift)
     if n_axis < 1e-12:
         axis_lift = np.array([1.0, 0.0, 0.0])
     else:
         axis_lift /= n_axis
- 
+
     omega = dtheta * axis_lift - dpsi * z_hat
     w = np.linalg.norm(omega)
- 
+
     if w > 0:
         u = omega / w
         v_new = _rodrigues_rotate(v, u, w)
         v_new /= max(np.linalg.norm(v_new), 1e-12)
     else:
         v_new = v
- 
+
     az_new, dip_new = _vector_to_az_dip(v_new)
     if np.hypot(v_new[0], v_new[1]) < 1e-8:
         az_new = az
     return az_new, dip_new
- 
+
 def min_curvature_path(stations):
     """
     Vector-based minimum curvature robust to pole wraps.
     """
     if not stations:
         return np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0])
- 
+
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     MDs = np.array([float(s["MD"]) for s in sta], dtype=float)
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
- 
+
     X, Y, Z = [0.0], [0.0], [0.0]
     for i in range(1, len(MDs)):
         dMD = MDs[i] - MDs[i - 1]
         if dMD <= 0:
             continue
- 
+
         v1 = vecs[i - 1]
         v2 = vecs[i]
- 
+
         cos_dog = float(np.clip(np.dot(v1, v2), -1.0, 1.0))
         dog = np.arccos(cos_dog)
         RF = 1.0 if dog < 1e-12 else (2.0 / dog) * np.tan(dog / 2.0)
- 
+
         dR = 0.5 * dMD * (v1 + v2) * RF
         X.append(X[-1] + dR[0])
         Y.append(Y[-1] + dR[1])
         Z.append(Z[-1] + dR[2])
- 
+
     return np.array(X), np.array(Y), np.array(Z), MDs
- 
+
 def make_planned_stations(length_m, step_m, az0, dip0, lift_per100, drift_per100):
     md = 0.0
     az = wrap_az(az0)
@@ -257,7 +257,7 @@ def make_planned_stations(length_m, step_m, az0, dip0, lift_per100, drift_per100
         az, dip = step_orientation(az, dip, d, lift_per100, drift_per100)
         stations.append({"MD": md, "Azimuth": az, "Angle": dip})
     return stations
- 
+
 def extend_actual(stations, to_depth, step_m, lift_per100, drift_per100):
     if not stations:
         return stations
@@ -271,7 +271,7 @@ def extend_actual(stations, to_depth, step_m, lift_per100, drift_per100):
         az, dip = step_orientation(az, dip, d, lift_per100, drift_per100)
         stations.append({"MD": md, "Azimuth": az, "Angle": dip})
     return stations
- 
+
 def trim_to_md(stations, target_md):
     if not stations:
         return stations
@@ -294,7 +294,7 @@ def trim_to_md(stations, target_md):
             trimmed.append({"MD": float(target_md), "Azimuth": wrap_az(az_interp), "Angle": float(dip_interp)})
             return trimmed
     return sta
- 
+
 # ---------------- Pole-safe rate derivation helpers -------------------
 def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
     """
@@ -311,10 +311,10 @@ def _polesafe_bearing_delta_rad(v1: np.ndarray, v2: np.ndarray) -> float:
     cross_h = E1 * N2 - N1 * E2    # positive for CCW in EN plane
     dot_h = E1 * E2 + N1 * N2
     return float(-np.arctan2(cross_h, dot_h))  # sign flip so positive = clockwise
- 
+
 def _polesafe_elevation_deg(v: np.ndarray) -> float:
     return float(np.rad2deg(np.arcsin(np.clip(v[2], -1.0, 1.0))))
- 
+
 def derive_lift_drift_last3(stations):
     """
     Pole-safe estimate from the last 3 surveys.
@@ -324,23 +324,23 @@ def derive_lift_drift_last3(stations):
         return None, None
     sta = sorted(stations, key=lambda d: float(d["MD"]))[-3:]
     MD = np.array([float(s["MD"]) for s in sta], dtype=float)
- 
+
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
     elev_deg = np.array([_polesafe_elevation_deg(v) for v in vecs], dtype=float)
- 
+
     heading = [0.0]
     for i in range(1, len(vecs)):
         dpsi = _polesafe_bearing_delta_rad(vecs[i - 1], vecs[i])  # positive = clockwise
         heading.append(heading[-1] + np.rad2deg(dpsi))
     heading = np.array(heading, dtype=float)
- 
+
     if not np.isfinite(np.ptp(MD)) or np.ptp(MD) < 1e-9:
         return None, None
- 
+
     lift_deg_per_m = np.polyfit(MD, elev_deg, 1)[0]
     drift_deg_per_m = np.polyfit(MD, heading, 1)[0]
     return float(lift_deg_per_m * 100.0), float(drift_deg_per_m * 100.0)
- 
+
 def strike_dip_to_axes(strike_deg, dip_deg_signed):
     strike = np.deg2rad(wrap_az(strike_deg))
     dip_abs = np.deg2rad(abs(dip_deg_signed))
@@ -352,7 +352,7 @@ def strike_dip_to_axes(strike_deg, dip_deg_signed):
     d_hat /= np.linalg.norm(d_hat)
     n_hat /= np.linalg.norm(n_hat)
     return s_hat, d_hat, n_hat
- 
+
 def segment_plane_intersection(p0, p1, P0, n_hat):
     u = p1 - p0
     denom = np.dot(n_hat, u)
@@ -362,14 +362,14 @@ def segment_plane_intersection(p0, p1, P0, n_hat):
     if 0.0 <= t <= 1.0:
         return p0 + t*u
     return None
- 
+
 def find_plane_intersection(points_xyz, P0, n_hat):
     for i in range(1, len(points_xyz)):
         p = segment_plane_intersection(points_xyz[i-1], points_xyz[i], P0, n_hat)
         if p is not None:
             return p
     return None
- 
+
 def _parse_table_flexible_df(df_in: pd.DataFrame) -> pd.DataFrame:
     # accepts variants: MD, Measured Depth, Azimuth/Azi/AZ, Angle/Dip/Inclination
     df = df_in.copy()
@@ -391,7 +391,7 @@ def _parse_table_flexible_df(df_in: pd.DataFrame) -> pd.DataFrame:
     out = out.dropna(subset=["MD","Azimuth","Angle"])
     out["Azimuth"] = out["Azimuth"] % 360.0
     return out
- 
+
 def point_at_md(X, Y, Z, MDs, target_md):
     tmd = float(clamp(target_md, float(MDs.min()), float(MDs.max())))
     i = int(np.searchsorted(MDs, tmd))
@@ -404,7 +404,7 @@ def point_at_md(X, Y, Z, MDs, target_md):
     y = Y[i-1] + t*(Y[i] - Y[i-1])
     z = Z[i-1] + t*(Z[i] - Z[i-1])
     return np.array([x, y, z])
- 
+
 def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=None, actual_az0=None, actual_dip0=None):
     """
     Inserts a 0 MD station.
@@ -424,7 +424,7 @@ def ensure_zero_station(stations, use_planned=False, plan_az0=None, plan_dip0=No
         az0, dip0 = float(stations[0]["Azimuth"]), float(stations[0]["Angle"])
     stations.insert(0, {"MD": 0.0, "Azimuth": wrap_az(az0), "Angle": clamp(dip0, -90.0, 90.0)})
     return stations
- 
+
 def local_rates_per100(stations):
     """
     Pole-safe per-100 m lift and drift.
@@ -434,28 +434,28 @@ def local_rates_per100(stations):
     sta = sorted(stations, key=lambda d: float(d["MD"]))
     if len(sta) < 2:
         return np.array([]), np.array([]), np.array([])
- 
+
     MD = np.array([float(s["MD"]) for s in sta], float)
     vecs = [_unit_vec_from_az_dip(float(s["Azimuth"]), float(s["Angle"])) for s in sta]
- 
+
     dMD = MD[1:] - MD[:-1]
     elev1 = np.array([_polesafe_elevation_deg(v) for v in vecs[:-1]], float)
     elev2 = np.array([_polesafe_elevation_deg(v) for v in vecs[1:]], float)
     d_elev = elev2 - elev1
- 
+
     d_bear = np.array([_polesafe_bearing_delta_rad(vecs[i], vecs[i+1]) for i in range(len(vecs) - 1)], float)
     d_bear_deg = np.rad2deg(d_bear)
- 
+
     with np.errstate(divide="ignore", invalid="ignore"):
         lift = np.where(dMD != 0, d_elev / dMD * 100.0, 0.0)
         drift = np.where(dMD != 0, d_bear_deg / dMD * 100.0, 0.0)
- 
+
     MDm = 0.5*(MD[1:] + MD[:-1])
     return MDm, lift, drift
- 
+
 def export_config(config_dict):
     return json.dumps(config_dict, indent=2)
- 
+
 def _parse_optional_float(s: str):
     s = (s or "").strip()
     if s == "":
@@ -464,7 +464,7 @@ def _parse_optional_float(s: str):
         return float(s)
     except Exception:
         return None
- 
+
 # Common legend style with title watermark
 LEGEND_TITLE = (
     "Drill-Hole-Deviation-Tracker<br>"
@@ -476,7 +476,7 @@ legend_style = dict(
     x=0.99, y=0.99, xanchor="right", yanchor="top",
     bgcolor="rgba(255,255,255,0.6)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1
 )
- 
+
 # ----------------------------------------------------------------------
 # Import/Export UI
 # ----------------------------------------------------------------------
@@ -506,12 +506,12 @@ with st.expander("Export or load session"):
             )
         else:
             st.info("The export button will appear once the page has enough info to build a JSON.")
- 
+
 # ----------------------------------------------------------------------
 # Main UI
 # ----------------------------------------------------------------------
 st.title("Drill Hole vs Planned Hole Deviation Tracking")
- 
+
 # Optional collar/target coordinates (XYZ)
 st.markdown("### Collar and target coordinates (optional)")
 st.caption(
@@ -529,7 +529,7 @@ with cxyz2:
     st.text_input("Target X", value=st.session_state.target_x_str, key="target_x_str", placeholder="(optional)")
     st.text_input("Target Y", value=st.session_state.target_y_str, key="target_y_str", placeholder="(optional)")
     st.text_input("Target Z", value=st.session_state.target_z_str, key="target_z_str", placeholder="(optional)")
- 
+
 collar_xyz = np.array(
     [
         _parse_optional_float(st.session_state.collar_x_str),
@@ -548,19 +548,19 @@ target_xyz = np.array(
 )
 collar_xyz_ok = all(v is not None for v in collar_xyz.tolist())
 target_xyz_ok = all(v is not None for v in target_xyz.tolist())
- 
+
 collar_shift = np.array([0.0, 0.0, 0.0], dtype=float)
 if collar_xyz_ok:
     collar_shift = np.array([float(collar_xyz[0]), float(collar_xyz[1]), float(collar_xyz[2])], dtype=float)
- 
+
 target_point = None
 if target_xyz_ok:
     target_point = np.array([float(target_xyz[0]), float(target_xyz[1]), float(target_xyz[2])], dtype=float)
- 
+
 # Planned hole inputs
 st.markdown("### Planned hole inputs")
 st.caption("Enter planned hole information here")
- 
+
 colA, colB, colC = st.columns(3)
 with colA:
     plan_len = st.number_input("Planned hole length", value=st.session_state.plan_len, step=10.0, min_value=1.0, key="plan_len")
@@ -581,7 +581,7 @@ with colC:
         step=0.1,
         key="plan_drift"
     )
- 
+
 # compute planned with vector-rotation stepping
 planned_stations = make_planned_stations(
     st.session_state.plan_len,
@@ -593,7 +593,7 @@ planned_stations = make_planned_stations(
 )
 px, py, pz, pmd = min_curvature_path(planned_stations)
 plan_pts = np.column_stack([px, py, pz]) + collar_shift.reshape(1, 3)
- 
+
 # Measured Collar Orientation (moved ABOVE surveys)
 st.markdown("### Measured Collar Orientation")
 st.caption(
@@ -606,9 +606,9 @@ with colAc1:
     act_az0 = st.number_input("Measured collar azimuth", value=st.session_state.act_az0, step=1.0, key="act_az0")
 with colAc2:
     act_dip0 = st.number_input("Measured collar dip", value=st.session_state.act_dip0, step=1.0, key="act_dip0")
- 
+
 use_planned_zero = st.checkbox("Use planned collar Az and Dip", value=st.session_state.use_planned_zero, key="use_planned_zero")
- 
+
 # Downhole surveys
 st.subheader("Downhole surveys")
 st.caption(
@@ -618,7 +618,7 @@ st.caption(
     "- Or **manual entry** in the table below.\n"
     "You can also deactivate (disable) bad survey rows using the **Active** column."
 )
- 
+
 # Use a session-state-backed radio so a loaded session can force the method.
 _method_options = ["CSV or Excel upload", "Manual entry"]
 method = st.radio(
@@ -628,9 +628,9 @@ method = st.radio(
     horizontal=True,
     key="survey_method",
 )
- 
+
 df_in = pd.DataFrame(columns=["MD", "Azimuth", "Angle", "Active"])
- 
+
 if method == "CSV or Excel upload":
     file = st.file_uploader(
         "Upload CSV or Excel with columns MD, Azimuth, Dip (Negative is Down). Flexible headers accepted.",
@@ -638,10 +638,10 @@ if method == "CSV or Excel upload":
         key="tabular_up"
     )
     flip_sign = st.checkbox("Uploaded dip is positive-down - flip sign to negative-down", value=st.session_state.flip_sign, key="flip_sign")
- 
+
     if "loaded_surveys_df" in st.session_state:
         df_in = st.session_state["loaded_surveys_df"].copy()
- 
+
     if file is not None:
         name = getattr(file, "name", "")
         ext = name.split(".")[-1].lower() if "." in name else ""
@@ -653,21 +653,21 @@ if method == "CSV or Excel upload":
                 raw_df = pd.read_excel(xls, sheet_name=sheet)
             else:
                 raw_df = pd.read_csv(file)
- 
+
             df_parsed = _parse_table_flexible_df(raw_df)
             if flip_sign:
                 df_parsed["Angle"] = -df_parsed["Angle"]
             if not flip_sign and len(df_parsed) > 0 and df_parsed["Angle"].median() > 0:
                 df_parsed["Angle"] = -df_parsed["Angle"]
                 st.info("Detected positive-down dips in file. Converted to negative-down.")
- 
+
             df_in = df_parsed.copy()
         except Exception as e:
             st.error(f"Could not read file: {e}")
- 
+
     if "Active" not in df_in.columns:
         df_in["Active"] = True
- 
+
     st.caption(f"Loaded {len(df_in)} survey rows (toggle **Active** to disable bad rows)")
     df_view = df_in.copy()
     df_view = df_view.rename(columns={"Angle": "Dip (Negative is Down)"})
@@ -680,7 +680,7 @@ if method == "CSV or Excel upload":
     )
     # map back to internal schema
     df_in = edited.rename(columns={"Dip (Negative is Down)": "Angle"}).copy()
- 
+
 else:
     st.caption("You can manually enter the survey data in the table below (toggle **Active** to disable bad rows).")
     if "loaded_surveys_df" in st.session_state:
@@ -704,18 +704,18 @@ else:
     df_in = edited.rename(columns={"Dip (Negative is Down)": "Angle"}).copy()
     if "Active" not in df_in.columns:
         df_in["Active"] = True
- 
+
 # Build actual station list (filter Active rows)
 df_for_actual = pd.DataFrame(df_in)
 if "Active" in df_for_actual.columns:
     df_for_actual["Active"] = df_for_actual["Active"].astype(bool)
     df_for_actual = df_for_actual[df_for_actual["Active"] == True]
- 
+
 actual_stations_base = [
     {"MD": float(r["MD"]), "Azimuth": wrap_az(float(r["Azimuth"])), "Angle": clamp(float(r["Angle"]), -90.0, 90.0)}
     for _, r in df_for_actual.dropna(subset=["MD", "Azimuth", "Angle"]).iterrows()
 ]
- 
+
 # Insert 0 station based on either planned collar or measured collar
 actual_stations_base = ensure_zero_station(
     actual_stations_base,
@@ -725,21 +725,23 @@ actual_stations_base = ensure_zero_station(
     actual_az0=st.session_state.act_az0,
     actual_dip0=st.session_state.act_dip0
 )
- 
+
 # suggested lift/drift from last 3
 sug_lift, sug_drift = derive_lift_drift_last3(actual_stations_base) if len(actual_stations_base) >= 3 else (None, None)
- 
+
 st.markdown("#### Remaining average lift and drift after last survey")
 st.caption(
-    "Enter the expected remaining average lift and drift projected to end-of-hole. "
-    "By default these are set to the suggested values from the last surveys (when available)."
+    "Enter the expected remaining average lift and drift. These drive the dashed "
+    "**projection** trace that extends from the current hole depth out to the planned "
+    "end-of-hole length. By default they are set to the suggested values from the last "
+    "surveys (when available)."
 )
 colS1, colS2 = st.columns(2)
 with colS1:
     st.caption(f"Suggested lift from last 3: {sug_lift:.2f} deg/100m" if sug_lift is not None else "Suggested lift needs at least 3 surveys")
 with colS2:
     st.caption(f"Suggested drift from last 3: {sug_drift:.2f} deg/100m" if sug_drift is not None else "Suggested drift needs at least 3 surveys")
- 
+
 colR1, colR2, colR3 = st.columns(3)
 with colR1:
     rem_lift = st.number_input(
@@ -756,49 +758,85 @@ with colR2:
         key="rem_drift"
     )
 with colR3:
-    actual_len = st.number_input(
-        "Actual hole length",
+    current_len = st.number_input(
+        "Current hole depth",
         value=float(st.session_state.actual_len),
         step=10.0,
         min_value=0.0,
         key="actual_len"
     )
- 
-# build actual to requested length: extend or trim
+
+# ----------------------------------------------------------------------
+# Build the CURRENT hole (real surveys, trimmed/extended to current depth)
+# and a separate PROJECTION from current depth to planned end-of-hole.
+# ----------------------------------------------------------------------
+# 1) Current hole: clip the survey-based stations to the current hole depth.
+#    If surveys stop short of the current depth, fill the gap using the
+#    remaining lift/drift so the "current" trace reaches the entered depth.
 actual_stations = actual_stations_base.copy()
 if actual_stations:
     last_md = sorted(actual_stations, key=lambda d: d["MD"])[-1]["MD"]
-    target_len = float(st.session_state.actual_len)
+    current_depth = float(st.session_state.actual_len)
     eps = 1e-9
-    if last_md < target_len - eps:
+    if last_md < current_depth - eps:
         actual_stations = extend_actual(
-            actual_stations, target_len, st.session_state.step_m,
+            actual_stations, current_depth, st.session_state.step_m,
             st.session_state.rem_lift, st.session_state.rem_drift
         )
-    elif last_md > target_len + eps:
-        actual_stations = trim_to_md(actual_stations, target_len)
- 
+    elif last_md > current_depth + eps:
+        actual_stations = trim_to_md(actual_stations, current_depth)
+
 ax, ay, az, amd = min_curvature_path(actual_stations) if actual_stations else (np.array([0.0]), np.array([0.0]), np.array([0.0]), np.array([0.0]))
 act_pts = (np.column_stack([ax, ay, az]) + collar_shift.reshape(1, 3)) if actual_stations else (np.column_stack([ax, ay, az]))
- 
+
+# 2) Projection: continue from the end of the current hole, using the
+#    remaining lift/drift, out to the PLANNED end-of-hole length.
+#    This is a forecast of where the hole would end up if current trends hold.
+proj_stations = []
+proj_pts = None
+plan_len_now = float(st.session_state.plan_len)
+current_depth = float(st.session_state.actual_len)
+if actual_stations and plan_len_now > current_depth + 1e-9:
+    # extend_actual starts from the last station, so the projection path
+    # shares its first point with the end of the current hole (no gap).
+    proj_stations = extend_actual(
+        [dict(s) for s in sorted(actual_stations, key=lambda d: float(d["MD"]))],
+        plan_len_now,
+        st.session_state.step_m,
+        st.session_state.rem_lift,
+        st.session_state.rem_drift,
+    )
+    # keep only the projected tail (from current depth onward) for a clean trace
+    proj_stations = [s for s in proj_stations if float(s["MD"]) >= current_depth - 1e-9]
+    if len(proj_stations) >= 2:
+        prx, pry, prz, prmd = min_curvature_path(proj_stations)
+        # min_curvature_path restarts at the origin, so re-anchor the projection
+        # to the actual end point of the current hole.
+        anchor = act_pts[-1]
+        proj_local = np.column_stack([prx, pry, prz])
+        proj_local = proj_local - proj_local[0] + anchor.reshape(1, 3)
+        proj_pts = proj_local
+    else:
+        proj_stations = []
+
 # ----------------------------------------------------------------------
 # Target plane and pierce points (disabled when collar+target coords provided)
 # ----------------------------------------------------------------------
 plane_enabled = not (collar_xyz_ok and target_xyz_ok)
- 
+
 pierce_plan = None
 pierce_act = None
 P0 = None
 s_hat = d_hat = n_hat = None
 plane_grid = None
- 
+
 if plane_enabled:
     st.subheader("Target plane and pierce points")
     st.caption(
         "This app assumes the target lies on a plane. Set the plane azimuth (right-hand rule) and dip (negative is down) "
         "to visualize pierce points and calculate the distance between the target and the actual hole along the target plane."
     )
- 
+
     colP1, colP2, colP3 = st.columns(3)
     with colP1:
         plane_strike = st.number_input("Plane strike deg", value=st.session_state.plane_strike, step=1.0, key="plane_strike")
@@ -816,31 +854,39 @@ if plane_enabled:
             max_value=float(st.session_state.plan_len),
             key="target_md"
         )
- 
+
     s_hat, d_hat, n_hat = strike_dip_to_axes(plane_strike, plane_dip)
- 
+
     # P0 is a point on the planned hole at target_md, shifted by collar coords if provided
     P0_local = point_at_md(px, py, pz, pmd, target_md)
     P0 = P0_local + collar_shift
- 
+
     # pierce points
+    # The target plane usually sits near EOH, so search the actual pierce along
+    # the current hole *and* its projection (combined path) so it still resolves.
     pierce_plan = find_plane_intersection(plan_pts, P0, n_hat)
-    pierce_act = find_plane_intersection(act_pts, P0, n_hat)
- 
+    if proj_pts is not None and len(proj_pts) > 1:
+        act_path_for_pierce = np.vstack([act_pts, proj_pts[1:]])
+    else:
+        act_path_for_pierce = act_pts
+    pierce_act = find_plane_intersection(act_path_for_pierce, P0, n_hat)
+
 # ----------------------------------------------------------------------
 # 3D view with equal axes
 # ----------------------------------------------------------------------
 st.markdown("### 3D view")
- 
+
 all_chunks = [plan_pts, act_pts]
+if proj_pts is not None:
+    all_chunks.append(proj_pts)
 # collar point (origin shifted if coordinates provided)
 collar_point = collar_shift.reshape(1, 3)
 all_chunks.append(collar_point)
- 
+
 # optional target point
 if target_point is not None:
     all_chunks.append(target_point.reshape(1, 3))
- 
+
 # plane-related points if enabled
 if plane_enabled and P0 is not None:
     all_chunks.append(P0.reshape(1, 3))
@@ -848,16 +894,16 @@ if plane_enabled and pierce_plan is not None:
     all_chunks.append(pierce_plan.reshape(1, 3))
 if plane_enabled and pierce_act is not None:
     all_chunks.append(pierce_act.reshape(1, 3))
- 
+
 ALL = np.vstack(all_chunks)
- 
+
 xmin, ymin, zmin = np.min(ALL, axis=0)
 xmax, ymax, zmax = np.max(ALL, axis=0)
 range_x = xmax - xmin
 range_y = ymax - ymin
 range_z = zmax - zmin
 max_span = max(range_x, range_y, range_z, 1.0)
- 
+
 # symmetric equal ranges around centers
 cx, cy, cz = (xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5
 half = 0.5 * max_span
@@ -866,28 +912,37 @@ L = half + pad
 xr = [cx - L, cx + L]
 yr = [cy - L, cy + L]
 zr = [cz - L, cz + L]
- 
+
 # plane mesh sized to the same cube (only if enabled)
 if plane_enabled and P0 is not None and s_hat is not None and d_hat is not None:
     span = 2.0 * L
     uu, vv = np.meshgrid(np.linspace(-span, span, 30), np.linspace(-span, span, 30))
     plane_grid = P0.reshape(1, 1, 3) + uu[..., None]*s_hat.reshape(1, 1, 3) + vv[..., None]*d_hat.reshape(1, 1, 3)
- 
+
 fig3d = go.Figure()
 fig3d.add_trace(go.Scatter3d(x=plan_pts[:, 0], y=plan_pts[:, 1], z=plan_pts[:, 2], mode="lines", name="Planned", line=dict(width=6)))
-fig3d.add_trace(go.Scatter3d(x=act_pts[:, 0], y=act_pts[:, 1], z=act_pts[:, 2], mode="lines", name="Actual", line=dict(width=6)))
- 
+fig3d.add_trace(go.Scatter3d(x=act_pts[:, 0], y=act_pts[:, 1], z=act_pts[:, 2], mode="lines", name="Current hole", line=dict(width=6)))
+
+# dashed/faded projection from current depth to planned end-of-hole
+if proj_pts is not None:
+    fig3d.add_trace(go.Scatter3d(
+        x=proj_pts[:, 0], y=proj_pts[:, 1], z=proj_pts[:, 2],
+        mode="lines",
+        name="Projection to EOH",
+        line=dict(width=4, dash="dash", color="rgba(214,39,40,0.55)")
+    ))
+
 fig3d.add_trace(go.Scatter3d(
     x=[collar_shift[0]], y=[collar_shift[1]], z=[collar_shift[2]],
     mode="markers", name="Collar", marker=dict(size=5)
 ))
- 
+
 if target_point is not None:
     fig3d.add_trace(go.Scatter3d(
         x=[target_point[0]], y=[target_point[1]], z=[target_point[2]],
         mode="markers", name="Target (XYZ)", marker=dict(size=6, symbol="diamond")
     ))
- 
+
 if plane_enabled and plane_grid is not None:
     fig3d.add_trace(go.Surface(
         x=plane_grid[..., 0],
@@ -916,10 +971,10 @@ if plane_enabled and pierce_plan is not None and pierce_act is not None:
     v_plane = v - np.dot(v, n_hat)*n_hat
     dist_on_plane = float(np.linalg.norm(v_plane))
     st.info(f"Pierce separation on plane: {dist_on_plane:.2f} m")
- 
+
 if not plane_enabled:
     st.info("Target Plane section is disabled because both collar and target coordinates were provided.")
- 
+
 fig3d.update_layout(
     scene=dict(
         xaxis_title="X East m", xaxis=dict(range=xr),
@@ -936,7 +991,7 @@ fig3d.update_layout(
     margin=dict(l=0, r=0, b=0, t=0)
 )
 st.plotly_chart(fig3d, use_container_width=True)
- 
+
 # Orientation plot: Azimuth and dip vs measured depth (actual hole)
 st.markdown("### Azimuth and dip vs measured depth (actual hole)")
 fig_orient = go.Figure()
@@ -946,10 +1001,10 @@ if actual_stations:
     DIP = [float(s["Angle"]) for s in sta]
     AZ = [wrap_az(float(s["Azimuth"])) for s in sta]
     AZu = np.rad2deg(np.unwrap(np.deg2rad(AZ)))
- 
+
     fig_orient.add_trace(go.Scatter(x=MD, y=DIP, mode="lines+markers", name="Dip deg (negative down)", yaxis="y1"))
     fig_orient.add_trace(go.Scatter(x=MD, y=AZu, mode="lines+markers", name="Azimuth deg (unwrapped)", yaxis="y2"))
- 
+
     dip_min, dip_max = float(np.min(DIP)), float(np.max(DIP))
     az_min, az_max = float(np.min(AZu)), float(np.max(AZu))
     pad2 = 2.0
@@ -959,7 +1014,7 @@ else:
     MD, DIP, AZu = [], [], []
     dip_range = [-90, 90]
     az_range = [0, 360]
- 
+
 fig_orient.update_layout(
     margin=dict(l=0, r=0, b=0, t=10),
     xaxis=dict(title="Measured depth along actual hole m"),
@@ -986,7 +1041,7 @@ fig_orient.update_layout(
     legend=legend_style
 )
 st.plotly_chart(fig_orient, use_container_width=True)
- 
+
 # Per 100 m deviation plot
 st.markdown("### Per 100 m deviation along actual hole")
 MDm, lift_series, drift_series = local_rates_per100(actual_stations) if actual_stations else (np.array([]), np.array([]), np.array([]))
@@ -1001,7 +1056,7 @@ fig_rate.update_layout(
     margin=dict(l=0, r=0, b=0, t=10)
 )
 st.plotly_chart(fig_rate, use_container_width=True)
- 
+
 # ----------------------------------------------------------------------
 # Export session JSON (includes imported/edited surveys, including Active flags)
 # ----------------------------------------------------------------------
@@ -1041,10 +1096,10 @@ cfg_dict = {
     }
 }
 cfg_json = export_config(cfg_dict)
- 
+
 # keep a copy so the top expander can offer a save button even after import
 st.session_state["latest_export_json"] = cfg_json
- 
+
 with st.expander("Export session", expanded=False):
     st.download_button(
         "Download session JSON",
@@ -1053,7 +1108,7 @@ with st.expander("Export session", expanded=False):
         mime="application/json",
         use_container_width=True
     )
- 
+
 st.caption(
     "Angles are dip-from-horizontal (negative down). Positive lift tilts up. Positive drift turns clockwise. "
     "Vector-rotation stepping and equal 3D axes ensure constant-lift and constant-drift arcs are circles."
